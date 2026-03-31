@@ -1,215 +1,117 @@
-const express    = require('express');
-const multer     = require('multer');
-const path       = require('path');
-const fs         = require('fs');
-const { v4: uuidv4 } = require('uuid');
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '..', 'uploads', 'ocr_temp');
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/tmp', 'uploads');
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    cb(null, uploadDir);
   },
-  filename: (req, file, cb) => cb(null, `ocr_${uuidv4()}${path.extname(file.originalname)}`),
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
 });
-const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = multer({ storage });
 
-async function runOCR(imagePath) {
+async function extractWithClaude(imagePath) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { console.log('No ANTHROPIC_API_KEY, skipping Claude Vision'); return null; }
   try {
-    const { createWorker } = require('tesseract.js');
-    const worker = await createWorker('eng', 1, { cachePath: '/tmp', logger: () => {} });
-    const { data: { text } } = await worker.recognize(imagePath);
-    await worker.terminate();
-    return text && text.trim().length > 3 ? text : null;
+    const base64Image = fs.readFileSync(imagePath).toString('base64');
+    const ext = path.extname(imagePath).toLowerCase();
+    const mediaTypeMap = { '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.gif':'image/gif','.webp':'image/webp' };
+    const mediaType = mediaTypeMap[ext] || 'image/jpeg';
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Image } },
+          { type: 'text', text: 'You are an invoice data extractor. Read this invoice and return ONLY a JSON object with these keys: vendor (string), invoice_no (string), date (YYYY-MM-DD), amount (number, excluding GST), gst (number, CGST+SGST combined), total (number), description (string), suggestedCategory (one of: Food & Beverage, Travel, Office Supplies, Equipment, Services, Utilities, Marketing, Other). Use null for missing fields. No explanation, only JSON.' }
+        ]}]
+      })
+    });
+    if (!response.ok) { console.error('Claude API error:', response.status); return null; }
+    const data = await response.json();
+    const text = data.content[0].text;
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) { console.error('No JSON in Claude response'); return null; }
+    return { ...JSON.parse(match[0]), source: 'claude-vision' };
   } catch (err) {
-    console.error('[Tesseract OCR]', err.message);
+    console.error('Claude Vision error:', err.message);
     return null;
   }
 }
 
-function parseOCRText(rawText) {
-  if (!rawText) return null;
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-  const text  = rawText;
+async function runTesseract(imagePath) {
+  try {
+    const Tesseract = require('tesseract.js');
+    const { data: { text } } = await Tesseract.recognize(imagePath, 'eng');
+    return text;
+  } catch (err) { console.error('Tesseract error:', err.message); return ''; }
+}
 
-  // ── Vendor ────────────────────────────────────────────────────────────────────
-  // Skip document-header lines; first real company name is the vendor
-  const skipVendor = /^(tax\s*invoice|delivery\s*challan|invoice\s*cum|receipt|gstin|gst\s*no|phone|e[\-\s]?mail|state|place|contact|dated|invoice\s*no|bill\s*no|buyer|consignee|ship\s*to|sold\s*to|^to:|^from:|si\s*no|sl\s*no|description|amount|total|cgst|sgst|igst|taxable|hsn|sac|rate|qty|quantity|per\s|nos\b|pcs\b|kgs\b|printed|dispatch|reference|signature|authoris|bank|account|ifsc|pan\s*no|cin\b)/i;
-
-  let vendor = '';
-  for (const line of lines.slice(0, 18)) {
-    if (line.length < 3) continue;
-    if (skipVendor.test(line)) continue;
-    if (/^\d/.test(line)) continue;
-    if (!/[a-zA-Z]{3,}/.test(line)) continue;
-    vendor = line.replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
-    if (vendor.length >= 3) break;
+function parseTesseractText(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const vendor = lines[0] || null;
+  let invoice_no = null;
+  for (const line of lines) {
+    const m = line.match(/(?:invoice|bill|receipt)\s*(?:no|num|number|#)?[\s:.-]*([A-Z0-9\/\-]+)/i);
+    if (m) { invoice_no = m[1]; break; }
   }
-
-  // ── Invoice number ────────────────────────────────────────────────────────────
-  let invoiceNo = '';
-  const invPatterns = [
-    /(?:invoice\s*no\.?|invoice\s*number|bill\s*no\.?|receipt\s*no\.)\s*[:#]?\s*([A-Z0-9\/_\-<>]{3,40})/i,
-    /(?:invoice|receipt|bill|booking|order|txn|ref|ticket)[\s#:no.]*([A-Z0-9\/_\-]{4,25})/i,
-    /(?:^|\s)(GST\/\d+\/[\d\-A-Za-z<>]+)/m,
-    /#\s*([A-Z0-9\-]{4,20})/i,
-  ];
-  for (const p of invPatterns) {
-    const m = text.match(p);
+  const monthMap = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+  let date = null;
+  for (const line of lines) {
+    let m = line.match(/(\d{1,2})[-\/\s](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[-\/\s](\d{2,4})/i);
     if (m) {
-      invoiceNo = (m[1] || m[0]).trim().replace(/<[^>]*>/g, '').trim();
-      if (invoiceNo.length >= 3) break;
+      const day = m[1].padStart(2,'0'), month = String(monthMap[m[2].toLowerCase()]).padStart(2,'0');
+      let year = m[3]; if (year.length===2) year='20'+year;
+      date = year+'-'+month+'-'+day; break;
+    }
+    m = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+    if (m) {
+      const day = m[1].padStart(2,'0'), month = m[2].padStart(2,'0');
+      let year = m[3]; if (year.length===2) year='20'+year;
+      date = year+'-'+month+'-'+day; break;
     }
   }
-
-  // ── Date ──────────────────────────────────────────────────────────────────────
-  let date = new Date().toISOString().slice(0, 10);
-  const MON = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-
-  const datePatterns = [
-    // 2026-03-04
-    { re: /(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/, fn: m => `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}` },
-    // 04-03-2026
-    { re: /(\d{1,2})[\-\/](\d{1,2})[\-\/](\d{4})/, fn: m => `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` },
-    // 4-Mar-26  OR  4-Mar-2026  (Indian invoice format)
-    { re: /(\d{1,2})[\-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[\-\s](\d{2,4})/i,
-      fn: m => {
-        let yr = parseInt(m[3]);
-        if (yr < 100) yr += 2000;
-        return `${yr}-${String(MON[m[2].slice(0,3).toLowerCase()]).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
-      }
-    },
-    // 4 March 2026
-    { re: /(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{4})/i,
-      fn: m => `${m[3]}-${String(MON[m[2].slice(0,3).toLowerCase()]).padStart(2,'0')}-${m[1].padStart(2,'0')}`
-    },
-  ];
-  for (const { re, fn } of datePatterns) {
-    const m = text.match(re);
-    if (m) { try { date = fn(m); } catch(e){} break; }
+  let total = null, amounts = [];
+  for (const line of lines) {
+    if (/NOS|PCS|QTY|QUANTITY|HSN|SAC/i.test(line)) continue;
+    const matches = line.match(/(?:Rs\.?|INR|\u20b9)?\s*(\d[\d,]*\.?\d*)/g);
+    if (matches) matches.forEach(m => { const n = parseFloat(m.replace(/[^0-9.]/g,'')); if(n>0) amounts.push(n); });
   }
-
-  // ── Amounts ───────────────────────────────────────────────────────────────────
-  // PRIORITY: ₹ / Rs / INR amounts → take the LARGEST (grand total is usually largest)
-  let total = 0;
-  const rupeeHits = [...text.matchAll(/(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/g)]
-    .map(m => parseFloat(m[1].replace(/,/g,'')))
-    .filter(n => n > 0);
-  if (rupeeHits.length > 0) total = Math.max(...rupeeHits);
-
-  // Tier 2: "Total" / "Grand Total" keyword + number
-  if (total === 0) {
-    const tp = [
-      /(?:grand\s*total|net\s*payable|amount\s*paid|amount\s*due|total\s*payable|net\s*total|total\s*bill)[\s:\u20b9Rs₹]*([\d,]+\.?\d{0,2})/i,
-      /(?:^|\n)\s*total[\s:\u20b9Rs₹]*([\d,]+\.?\d{0,2})/im,
-    ];
-    for (const p of tp) {
-      const m = text.match(p);
-      if (m) { const v = parseFloat(m[1].replace(/,/g,'')); if (v > 0) { total = v; break; } }
-    }
-  }
-
-  // Tier 3: largest standalone number — but EXCLUDE unit suffixes (NOS, PCS, KGS) and % rates
-  if (total === 0) {
-    const nums = [...text.matchAll(/\b([\d,]+(?:\.\d{2})?)\b(?!\s*(?:%|NOS|nos|Nos|PCS|pcs|KGS?|kgs?|units?|Nos\b))/g)]
-      .map(m => parseFloat(m[1].replace(/,/g,'')))
-      .filter(n => n >= 10 && n < 10_000_000);
-    if (nums.length) total = Math.max(...nums);
-  }
-
-  // ── GST (CGST + SGST + IGST) ──────────────────────────────────────────────────
-  // Per-line: for each line containing cgst/sgst/igst, grab LAST number (the amount, not the %)
+  if (amounts.length > 0) total = Math.max(...amounts);
   let gst = 0;
-  const taxLines = lines.filter(l => /\b(cgst|sgst|igst|utgst)\b/i.test(l));
-  if (taxLines.length > 0) {
-    for (const tl of taxLines) {
-      const nums = [...tl.matchAll(/([\d,]+(?:\.\d{1,2})?)/g)]
-        .map(m => parseFloat(m[1].replace(/,/g,'')))
-        .filter(n => n > 0 && n < total * 0.8);  // exclude values >= 80% of total (likely the subtotal column)
-      if (nums.length) gst += nums[nums.length - 1]; // last number = amount column
-    }
-  } else {
-    // fallback single GST pattern
-    const m = text.match(/(?:gst|tax)[\s:@\u20b9Rs₹%]*(\d[\d,]*\.?\d{0,2})/i);
-    if (m) gst = parseFloat(m[1].replace(/,/g,''));
+  for (const line of lines) {
+    if (/CGST|SGST/i.test(line)) { const m = line.match(/(\d[\d,]*\.?\d*)/); if(m) gst += parseFloat(m[1].replace(/,/g,'')); }
   }
-
-  const amount = (total > 0 && gst > 0 && gst < total) ? +(total - gst).toFixed(2) : total;
-
-  // ── Description ───────────────────────────────────────────────────────────────
-  let description = '';
-
-  // Look for "Description of Goods" table items
-  const descSection = text.match(/description\s+of\s+goods[\s\S]{0,30}\n([\s\S]*?)(?:\n\s*(?:total|cgst|sgst|igst|amount))/i);
-  if (descSection) {
-    const itemLines = descSection[1].split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 3 && /[a-zA-Z]{3,}/.test(l) && !/^\d+$/.test(l) && !/^(hsn|sac|quantity|rate|per|nos|pcs)/i.test(l));
-    if (itemLines.length) description = itemLines.slice(0,3).join(', ');
-  }
-
-  if (!description) {
-    const m = text.match(/(?:description|particulars|item|service|for)[\s:]+([^\n]{5,80})/i);
-    if (m) description = m[1].trim();
-  }
-
-  // Fallback: first non-header line with alphabetic content
-  if (!description) {
-    const skip = /^(tax\s*invoice|delivery|invoice|receipt|bill|total|amount|gst|tax|challan|gstin|state|contact|phone|email|printed|buyer|consignee|dispatch|reference|bank|dated|no\.|from|to\s)/i;
-    const c = lines.slice(1, 10).find(l => /[a-zA-Z]{4,}/.test(l) && l.length > 4 && l.length < 100 && !skip.test(l));
-    if (c) description = c;
-  }
-
-  // ── Category ──────────────────────────────────────────────────────────────────
-  let suggestedCategory = 'other';
-  if (/rapido|ola|uber|cab|taxi|auto\s*ride|flight|train|bus|fuel|petrol|diesel|toll|transport|porter|logistics/i.test(text))
-    suggestedCategory = 'travel';
-  else if (/food|restaurant|cafe|coffee|lunch|dinner|swiggy|zomato|pizza|burger|meal|canteen|bisleri|aqua/i.test(text))
-    suggestedCategory = 'consumables';
-  else if (/stationery|office supply|amazon|flipkart|laptop|printer|keyboard|mouse|tools?|hardware|cnc|hardcut|boring|machining|turning|lathe|drill|cutting|tooling/i.test(text))
-    suggestedCategory = 'consumables';
-  else if (/electricity|power|water\s*supply|rent|internet|broadband|telephone|mobile\s*bill|utility/i.test(text))
-    suggestedCategory = 'overhead';
-  else if (/advance|deposit|prepaid|token|booking\s*amount/i.test(text))
-    suggestedCategory = 'advance';
-
-  return {
-    vendor:      vendor || lines[0]?.replace(/[^a-zA-Z0-9\s&.'()\-]/g,'').trim() || 'Unknown Vendor',
-    invoice_no:  invoiceNo,
-    date,
-    amount:      amount > 0 ? amount.toFixed(2) : (total > 0 ? total.toFixed(2) : ''),
-    gst:         gst.toFixed(2),
-    total:       total > 0 ? total.toFixed(2) : '',
-    description: description.slice(0, 200),
-    suggestedCategory,
-    source:      'tesseract',
-  };
+  const amount = (total && gst) ? total - gst : total;
+  return { vendor, invoice_no, date, amount: amount||null, gst: gst||null, total, description: null, suggestedCategory: 'Other', source: 'tesseract' };
 }
 
 router.post('/', authenticate, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const imagePath = req.file.path;
   try {
-    const rawText = await runOCR(imagePath);
-    if (rawText) {
-      console.log('[OCR raw]', rawText.slice(0, 500));  // debug log
-      res.json(parseOCRText(rawText));
-    } else {
-      res.json({
-        vendor:'', invoice_no:'', date: new Date().toISOString().slice(0,10),
-        amount:'', gst:'0.00', total:'', description:'',
-        suggestedCategory:'other', source:'manual',
-        message:'Could not read text from image. Please fill in manually.',
-      });
-    }
+    const claudeResult = await extractWithClaude(imagePath);
+    if (claudeResult) { console.log('OCR: Claude Vision succeeded'); return res.json(claudeResult); }
+    console.log('OCR: Falling back to Tesseract');
+    const ocrText = await runTesseract(imagePath);
+    if (ocrText) return res.json(parseTesseractText(ocrText));
+    return res.json({ vendor:null, invoice_no:null, date:null, amount:null, gst:null, total:null, description:null, suggestedCategory:'Other', source:'manual' });
   } catch (err) {
-    console.error('[OCR Route]', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('OCR route error:', err);
+    return res.status(500).json({ error: 'OCR processing failed', details: err.message });
   } finally {
-    try { fs.unlinkSync(imagePath); } catch(e){}
+    try { if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath); } catch(e) { console.error('Cleanup error:', e.message); }
   }
 });
 
