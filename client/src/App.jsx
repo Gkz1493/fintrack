@@ -1,12 +1,13 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
-import Sidebar    from './components/Sidebar';
-import Login      from './pages/Login';
-import Dashboard  from './pages/Dashboard';
-import Upload     from './pages/Upload';
-import Expenses   from './pages/Expenses';
+import Sidebar        from './components/Sidebar';
+import Login          from './pages/Login';
+import Dashboard      from './pages/Dashboard';
+import Upload         from './pages/Upload';
+import Expenses       from './pages/Expenses';
 import Reimbursements from './pages/Reimbursements';
-import Employees  from './pages/Employees';
+import Employees      from './pages/Employees';
+import Projects       from './pages/Projects';
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
@@ -38,12 +39,13 @@ export default function App() {
             <div className="flex-1 flex flex-col overflow-hidden">
               <main className="flex-1 overflow-y-auto scrollable">
                 <Routes>
-                  <Route path="/dashboard"       element={<Dashboard />} />
-                  <Route path="/upload"          element={<Upload />} />
-                  <Route path="/expenses"        element={<Expenses />} />
-                  <Route path="/reimbursements"  element={<Reimbursements />} />
-                  <Route path="/employees"       element={<RequireAdmin><Employees /></RequireAdmin>} />
-                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/dashboard"      element={<Dashboard />} />
+                  <Route path="/upload"         element={<Upload />} />
+                  <Route path="/expenses"       element={<Expenses />} />
+                  <Route path="/reimbursements" element={<Reimbursements />} />
+                  <Route path="/projects"       element={<Projects />} />
+                  <Route path="/employees"      element={<RequireAdmin><Employees /></RequireAdmin>} />
+                  <Route path="*"               element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </main>
             </div>
