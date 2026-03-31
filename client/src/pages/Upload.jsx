@@ -4,7 +4,7 @@ import {
   Camera, Upload as UploadIcon, Scan, FolderOpen, Plus, Check,
   ChevronRight, CheckCircle2, ArrowLeft, ExternalLink,
 } from 'lucide-react';
-import { createExpense, getProjects, getEmployees, ocrScan } from '../api';
+import { createExpense, getProjectNames, getReimburseNames, getEmployees, ocrScan, createProject } from '../api';
 import { useAuth } from '../context/AuthContext';
 
 const CATEGORIES = [
@@ -100,6 +100,10 @@ export default function Upload() {
     setSaving(true); setError('');
     try {
       const projName = newProjMode && newProjName.trim() ? newProjName.trim() : form.project;
+      // Auto-register the project name so it appears in future dropdowns
+      if (projName) {
+        try { await createProject({ name: projName }); } catch(_) {}
+      }
       const fd = new FormData();
       fd.append('vendor',           form.vendor);
       fd.append('invoice_no',       form.invoice_no);
