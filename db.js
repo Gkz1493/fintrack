@@ -4,7 +4,7 @@ const fs       = require('fs');
 const bcrypt   = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
-/* ── Persistent storage: Railway Volume → /data → app dir ─────────
+/* ââ Persistent storage: Railway Volume â /data â app dir âââââââââ
    In Railway: Add a Volume, set mount path to /data.
    The env var RAILWAY_VOLUME_MOUNT_PATH is set automatically.      */
 const DB_DIR  = process.env.DB_DIR
@@ -17,7 +17,7 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-/* ── Schema ─────────────────────────────────────────────────────── */
+/* ââ Schema âââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id         TEXT PRIMARY KEY,
@@ -71,7 +71,7 @@ db.exec(`
   );
 `);
 
-/* ── Migration: make employees.email nullable (drop NOT NULL) ───── */
+/* ââ Migration: make employees.email nullable (drop NOT NULL) âââââ */
 try {
   const cols = db.prepare('PRAGMA table_info(employees)').all();
   const emailCol = cols.find(c => c.name === 'email');
@@ -85,26 +85,45 @@ try {
       DROP TABLE employees;
       ALTER TABLE employees_v2 RENAME TO employees;
     `);
-    console.log('✅ Migrated employees table (email now nullable)');
+    console.log('â Migrated employees table (email now nullable)');
   }
 } catch (e) { console.warn('Employee migration skipped:', e.message); }
 
-/* ── Seed admin account ─────────────────────────────────────────── */
+/* -- Migration: add project_details table -- */
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_details (
+      id               TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      project_name     TEXT UNIQUE NOT NULL,
+      client_name      TEXT,
+      mobile           TEXT,
+      email            TEXT,
+      address          TEXT,
+      fund_allocated   REAL DEFAULT 0,
+      fund_releases    TEXT DEFAULT '[]',
+      drive_folder_url TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      updated_at       TEXT DEFAULT (datetime('now'))
+    )
+  `);
+} catch (e) { console.warn('project_details table:', e.message); }
+
+/* ââ Seed admin account âââââââââââââââââââââââââââââââââââââââââââ */
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();
 if (!adminExists) {
   const pw = process.env.ADMIN_PASSWORD || 'Admin@123';
   db.prepare("INSERT INTO users (id,name,email,password,role) VALUES (?,?,?,?,'admin')")
     .run(uuidv4(), 'Admin', process.env.ADMIN_EMAIL || 'admin@company.com', bcrypt.hashSync(pw, 10));
-  console.log('✅ Admin created:', process.env.ADMIN_EMAIL || 'admin@company.com');
+  console.log('â Admin created:', process.env.ADMIN_EMAIL || 'admin@company.com');
 }
 
-/* ── Seed demo projects only on a truly empty DB (no expenses yet) ─ */
+/* ââ Seed demo projects only on a truly empty DB (no expenses yet) â */
 const projCount = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
 const expCount  = db.prepare('SELECT COUNT(*) as c FROM expenses').get().c;
 if (projCount === 0 && expCount === 0) {
   const ins = db.prepare('INSERT OR IGNORE INTO projects (id,name) VALUES (?,?)');
   ['Office Renovation','Client Project Alpha','Marketing Campaign Q1'].forEach(n => ins.run(uuidv4(), n));
-  console.log('✅ Demo projects seeded');
+  console.log('â Demo projects seeded');
 }
 
 module.exports = db;
