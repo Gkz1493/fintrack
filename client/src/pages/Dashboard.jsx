@@ -84,7 +84,7 @@ export default function Dashboard() {
         </div>
 
         <div className="card p-4">
-          <h3 className="font-semibold text-gray-800 mb-3 text-sm">3D Expense Visualization — {selectedProject}</h3>
+          <h3 className="font-semibold text-gray-800 mb-3 text-sm">Expense Analytics — {selectedProject}</h3>
           <ThreeViz expenses={projStats.expenses || []} projectMode={true} />
         </div>
 
@@ -187,8 +187,8 @@ export default function Dashboard() {
 
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-gray-800 text-sm">3D Expense Explorer</h3>
-          <span className="text-xs text-gray-400">🖱 Drag to rotate · Scroll to zoom · Click a column to drill down</span>
+          <h3 className="font-semibold text-gray-800 text-sm">Expense Analytics</h3>
+          <span className="text-xs text-gray-400">📊 Monthly trend &amp; project breakdown</span>
         </div>
         <ThreeViz expenses={expenses} projectMode={false} onProjectClick={drillDown} />
       </div>
