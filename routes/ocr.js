@@ -1,7 +1,3 @@
-/**
- * OCR Route — uses Tesseract.js for free local OCR (no API key required).
- * Extracts vendor, invoice number, date, amount, GST, and category from receipts.
- */
 const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
@@ -24,13 +20,10 @@ const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 async function runOCR(imagePath) {
   try {
     const { createWorker } = require('tesseract.js');
-    const worker = await createWorker('eng', 1, {
-      cachePath: '/tmp',
-      logger: () => {},
-    });
+    const worker = await createWorker('eng', 1, { cachePath: '/tmp', logger: () => {} });
     const { data: { text } } = await worker.recognize(imagePath);
     await worker.terminate();
-    return text && text.trim().length > 5 ? text : null;
+    return text && text.trim().length > 3 ? text : null;
   } catch (err) {
     console.error('[Tesseract OCR]', err.message);
     return null;
@@ -42,25 +35,30 @@ function parseOCRText(rawText) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   const text  = rawText;
 
-  // Vendor: first meaningful line in top 5
+  // ── Vendor ──────────────────────────────────────────────────────────────────
   let vendor = '';
   for (const line of lines.slice(0, 5)) {
-    if (/[a-zA-Z]{3,}/.test(line) && !/^(date|time|bill|invoice|receipt|order|#)/i.test(line)) {
+    if (/[a-zA-Z]{3,}/.test(line) && !/^(date|time|bill|invoice|receipt|order|#|to\s)/i.test(line)) {
       vendor = line.replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
       if (vendor.length >= 3) break;
     }
   }
+  // If first line starts with "To " (like "To Ramesh kanishka"), strip the "To "
+  if (!vendor) {
+    const toLine = lines.slice(0,5).find(l => /^to\s+[a-zA-Z]/i.test(l));
+    if (toLine) vendor = toLine.replace(/^to\s+/i, '').replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
+  }
 
-  // Invoice number
+  // ── Invoice number ───────────────────────────────────────────────────────────
   let invoiceNo = '';
   const invPatterns = [
     /(?:invoice|receipt|bill|booking|order|txn|transaction|ref|ticket)[\s#:no.]*([A-Z0-9\/_\-]{4,25})/i,
     /\b(?:no|num|id)[\s:.#]*([A-Z0-9_\-]{5,20})\b/i,
     /#\s*([A-Z0-9\-]{4,20})/i,
   ];
-  for (const p of invPatterns) { const m = text.match(p); if (m && m[1]) { invoiceNo = m[1].trim(); break; } }
+  for (const p of invPatterns) { const m = text.match(p); if (m?.[1]) { invoiceNo = m[1].trim(); break; } }
 
-  // Date
+  // ── Date ────────────────────────────────────────────────────────────────────
   let date = new Date().toISOString().slice(0, 10);
   const MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
   const datePatterns = [
@@ -71,45 +69,71 @@ function parseOCRText(rawText) {
   ];
   for (const { re, fn } of datePatterns) { const m = text.match(re); if (m) { try { date = fn(m); } catch(e){} break; } }
 
-  // Amounts
+  // ── Amounts ──────────────────────────────────────────────────────────────────
   let total = 0;
+  // Tier 1: explicit total keywords
   const totalPatterns = [
-    /(?:total amount|grand total|net payable|amount paid|amount due|total payable|to pay|net total|final amount)[\s:\u20b9Rs]*(\d[\d,]*\.?\d{0,2})/i,
-    /(?:^|\n)total[\s:\u20b9Rs]*(\d[\d,]*\.?\d{0,2})/im,
-    /(?:^|\n)amount[\s:\u20b9Rs]*(\d[\d,]*\.?\d{0,2})/im,
+    /(?:total amount|grand total|net payable|amount paid|amount due|total payable|to pay|net total|final amount|total bill)[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/i,
+    /(?:^|\n)\s*total[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
+    /(?:^|\n)\s*amount[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
+    /(?:^|\n)\s*(?:bill|sub.?total|subtotal)[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
   ];
-  for (const p of totalPatterns) { const m = text.match(p); if (m) { total = parseFloat(m[1].replace(/,/g,'')); if (total > 0) break; } }
+  for (const p of totalPatterns) {
+    const m = text.match(p);
+    if (m) { total = parseFloat(m[1].replace(/,/g,'')); if (total > 0) break; }
+  }
+  // Tier 2: currency symbol prefix (₹50, Rs.100, INR 250)
+  if (total === 0) {
+    const hits = [...text.matchAll(/(?:₹|Rs\.?|INR)\s*(\d[\d,]*(?:\.\d{1,2})?)/g)];
+    if (hits.length > 0) {
+      const amounts = hits.map(m => parseFloat(m[1].replace(/,/g,''))).filter(n => n > 0);
+      if (amounts.length) total = Math.max(...amounts);
+    }
+  }
+  // Tier 3: Indian price suffix (50/-, 250.00/-)
+  if (total === 0) {
+    const m = text.match(/(\d[\d,]*(?:\.\d{1,2})?)\s*\/-/);
+    if (m) total = parseFloat(m[1].replace(/,/g,''));
+  }
+  // Tier 4: last/largest standalone number on the bill as fallback
+  if (total === 0) {
+    const nums = [...text.matchAll(/\b(\d{1,6}(?:\.\d{2})?)\b/g)]
+      .map(m => parseFloat(m[1]))
+      .filter(n => n >= 1 && n < 1000000);
+    if (nums.length) total = nums[nums.length - 1]; // last number = often the total
+  }
 
+  // ── GST ──────────────────────────────────────────────────────────────────────
   let gst = 0;
-  const taxPatterns = [/(?:gst|igst|sgst|cgst|service tax|tax)[\s:@\u20b9Rs%]*(\d[\d,]*\.?\d{0,2})/i];
+  const taxPatterns = [/(?:gst|igst|sgst|cgst|service tax|tax)[\s:@\u20b9Rs₹%]*(\d[\d,]*\.?\d{0,2})/i];
   for (const p of taxPatterns) { const m = text.match(p); if (m) { gst = parseFloat(m[1].replace(/,/g,'')); break; } }
 
-  const amount = total > 0 && gst > 0 ? +(total - gst).toFixed(2) : total;
+  const amount = (total > 0 && gst > 0) ? +(total - gst).toFixed(2) : total;
 
-  // Description
+  // ── Description ──────────────────────────────────────────────────────────────
   let description = '';
   const descPatterns = [/(?:description|particulars|item|service|for)[\s:]+([^\n]{5,80})/i];
   for (const p of descPatterns) { const m = text.match(p); if (m) { description = m[1].trim(); break; } }
-  if (!description && lines.length > 2) {
-    const c = lines.slice(1,4).find(l => /[a-zA-Z]{4,}/.test(l) && l.length > 5 && l.length < 80);
+  if (!description && lines.length > 1) {
+    const c = lines.slice(1,5).find(l => /[a-zA-Z]{4,}/.test(l) && l.length > 4 && l.length < 80 && !/^(date|invoice|receipt|bill|total|amount|gst)/i.test(l));
     if (c) description = c;
   }
 
-  // Category detection
+  // ── Category ─────────────────────────────────────────────────────────────────
   let suggestedCategory = 'other';
-  if (/rapido|ola|uber|cab|taxi|auto|ride|flight|train|bus|fuel|petrol|diesel|toll|transport/i.test(text)) suggestedCategory = 'travel';
-  else if (/food|restaurant|cafe|coffee|lunch|dinner|swiggy|zomato|pizza|burger|meal/i.test(text)) suggestedCategory = 'consumables';
+  if (/rapido|ola|uber|cab|taxi|auto|ride|flight|train|bus|fuel|petrol|diesel|toll|transport|porter/i.test(text)) suggestedCategory = 'travel';
+  else if (/food|restaurant|cafe|coffee|lunch|dinner|swiggy|zomato|pizza|burger|meal|water|bisleri|aqua/i.test(text)) suggestedCategory = 'consumables';
   else if (/stationery|office|amazon|flipkart|laptop|printer|keyboard|mouse|supply/i.test(text)) suggestedCategory = 'consumables';
-  else if (/electricity|power|water|rent|internet|broadband|telephone|mobile|utility/i.test(text)) suggestedCategory = 'overhead';
+  else if (/electricity|power|water supply|rent|internet|broadband|telephone|mobile|utility|bill/i.test(text)) suggestedCategory = 'overhead';
   else if (/advance|deposit|prepaid|token|booking amount/i.test(text)) suggestedCategory = 'advance';
 
   return {
-    vendor: vendor || 'Unknown Vendor',
+    vendor: vendor || lines[0]?.replace(/[^a-zA-Z0-9\s&.'()\-]/g,'').trim() || 'Unknown Vendor',
     invoice_no: invoiceNo,
     date,
-    amount: amount > 0 ? amount.toFixed(2) : total.toFixed(2),
+    amount: amount > 0 ? amount.toFixed(2) : total > 0 ? total.toFixed(2) : '',
     gst: gst.toFixed(2),
-    total: total.toFixed(2),
+    total: total > 0 ? total.toFixed(2) : '',
     description: description.slice(0, 200),
     suggestedCategory,
     source: 'tesseract',
@@ -122,15 +146,9 @@ router.post('/', authenticate, upload.single('file'), async (req, res) => {
   try {
     const rawText = await runOCR(imagePath);
     if (rawText) {
-      const result = parseOCRText(rawText);
-      res.json(result);
+      res.json(parseOCRText(rawText));
     } else {
-      res.json({
-        vendor: '', invoice_no: '', date: new Date().toISOString().slice(0,10),
-        amount: '', gst: '0.00', total: '', description: '',
-        suggestedCategory: 'other', source: 'manual',
-        message: 'Could not read text from image. Please fill in manually.',
-      });
+      res.json({ vendor:'', invoice_no:'', date: new Date().toISOString().slice(0,10), amount:'', gst:'0.00', total:'', description:'', suggestedCategory:'other', source:'manual', message:'Could not read text from image. Please fill in manually.' });
     }
   } catch (err) {
     console.error('[OCR Route]', err.message);
