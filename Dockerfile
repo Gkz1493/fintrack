@@ -7,6 +7,7 @@ COPY . .
 RUN node -e "const f='package.json';const p=JSON.parse(require('fs').readFileSync(f,'utf8'));delete p.scripts.postinstall;require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
 # Install server deps (with scripts enabled so better-sqlite3 compiles)
 RUN npm install
+RUN npm rebuild better-sqlite3 --build-from-source
 # Build client
 RUN cd client && npm install && npm run build
 RUN mkdir -p /data
