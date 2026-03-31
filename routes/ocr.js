@@ -1,11 +1,11 @@
-const express = require('express');
-const multer  = require('multer');
-const path    = require('path');
-const fs      = require('fs');
+const express    = require('express');
+const multer     = require('multer');
+const path       = require('path');
+const fs         = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { authenticate } = require('../middleware/auth');
 
-const router  = express.Router();
+const router = express.Router();
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -35,108 +35,157 @@ function parseOCRText(rawText) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   const text  = rawText;
 
-  // ── Vendor ──────────────────────────────────────────────────────────────────
+  // ── Vendor ────────────────────────────────────────────────────────────────────
+  // Skip document-header lines; first real company name is the vendor
+  const skipVendor = /^(tax\s*invoice|delivery\s*challan|invoice\s*cum|receipt|gstin|gst\s*no|phone|e[\-\s]?mail|state|place|contact|dated|invoice\s*no|bill\s*no|buyer|consignee|ship\s*to|sold\s*to|^to:|^from:|si\s*no|sl\s*no|description|amount|total|cgst|sgst|igst|taxable|hsn|sac|rate|qty|quantity|per\s|nos\b|pcs\b|kgs\b|printed|dispatch|reference|signature|authoris|bank|account|ifsc|pan\s*no|cin\b)/i;
+
   let vendor = '';
-  for (const line of lines.slice(0, 5)) {
-    if (/[a-zA-Z]{3,}/.test(line) && !/^(date|time|bill|invoice|receipt|order|#|to\s)/i.test(line)) {
-      vendor = line.replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
-      if (vendor.length >= 3) break;
-    }
-  }
-  // If first line starts with "To " (like "To Ramesh kanishka"), strip the "To "
-  if (!vendor) {
-    const toLine = lines.slice(0,5).find(l => /^to\s+[a-zA-Z]/i.test(l));
-    if (toLine) vendor = toLine.replace(/^to\s+/i, '').replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
+  for (const line of lines.slice(0, 18)) {
+    if (line.length < 3) continue;
+    if (skipVendor.test(line)) continue;
+    if (/^\d/.test(line)) continue;
+    if (!/[a-zA-Z]{3,}/.test(line)) continue;
+    vendor = line.replace(/[^a-zA-Z0-9\s&.'()\-]/g, '').trim();
+    if (vendor.length >= 3) break;
   }
 
-  // ── Invoice number ───────────────────────────────────────────────────────────
+  // ── Invoice number ────────────────────────────────────────────────────────────
   let invoiceNo = '';
   const invPatterns = [
-    /(?:invoice|receipt|bill|booking|order|txn|transaction|ref|ticket)[\s#:no.]*([A-Z0-9\/_\-]{4,25})/i,
-    /\b(?:no|num|id)[\s:.#]*([A-Z0-9_\-]{5,20})\b/i,
+    /(?:invoice\s*no\.?|invoice\s*number|bill\s*no\.?|receipt\s*no\.)\s*[:#]?\s*([A-Z0-9\/_\-<>]{3,40})/i,
+    /(?:invoice|receipt|bill|booking|order|txn|ref|ticket)[\s#:no.]*([A-Z0-9\/_\-]{4,25})/i,
+    /(?:^|\s)(GST\/\d+\/[\d\-A-Za-z<>]+)/m,
     /#\s*([A-Z0-9\-]{4,20})/i,
   ];
-  for (const p of invPatterns) { const m = text.match(p); if (m?.[1]) { invoiceNo = m[1].trim(); break; } }
-
-  // ── Date ────────────────────────────────────────────────────────────────────
-  let date = new Date().toISOString().slice(0, 10);
-  const MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-  const datePatterns = [
-    { re: /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/, fn: m => `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}` },
-    { re: /(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/, fn: m => `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` },
-    { re: /(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{4})/i,
-      fn: m => `${m[3]}-${String(MONTHS[m[2].slice(0,3).toLowerCase()]).padStart(2,'0')}-${m[1].padStart(2,'0')}` },
-  ];
-  for (const { re, fn } of datePatterns) { const m = text.match(re); if (m) { try { date = fn(m); } catch(e){} break; } }
-
-  // ── Amounts ──────────────────────────────────────────────────────────────────
-  let total = 0;
-  // Tier 1: explicit total keywords
-  const totalPatterns = [
-    /(?:total amount|grand total|net payable|amount paid|amount due|total payable|to pay|net total|final amount|total bill)[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/i,
-    /(?:^|\n)\s*total[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
-    /(?:^|\n)\s*amount[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
-    /(?:^|\n)\s*(?:bill|sub.?total|subtotal)[\s:\u20b9Rs₹]*(\d[\d,]*\.?\d{0,2})/im,
-  ];
-  for (const p of totalPatterns) {
+  for (const p of invPatterns) {
     const m = text.match(p);
-    if (m) { total = parseFloat(m[1].replace(/,/g,'')); if (total > 0) break; }
-  }
-  // Tier 2: currency symbol prefix (₹50, Rs.100, INR 250)
-  if (total === 0) {
-    const hits = [...text.matchAll(/(?:₹|Rs\.?|INR)\s*(\d[\d,]*(?:\.\d{1,2})?)/g)];
-    if (hits.length > 0) {
-      const amounts = hits.map(m => parseFloat(m[1].replace(/,/g,''))).filter(n => n > 0);
-      if (amounts.length) total = Math.max(...amounts);
+    if (m) {
+      invoiceNo = (m[1] || m[0]).trim().replace(/<[^>]*>/g, '').trim();
+      if (invoiceNo.length >= 3) break;
     }
   }
-  // Tier 3: Indian price suffix (50/-, 250.00/-)
-  if (total === 0) {
-    const m = text.match(/(\d[\d,]*(?:\.\d{1,2})?)\s*\/-/);
-    if (m) total = parseFloat(m[1].replace(/,/g,''));
-  }
-  // Tier 4: last/largest standalone number on the bill as fallback
-  if (total === 0) {
-    const nums = [...text.matchAll(/\b(\d{1,6}(?:\.\d{2})?)\b/g)]
-      .map(m => parseFloat(m[1]))
-      .filter(n => n >= 1 && n < 1000000);
-    if (nums.length) total = nums[nums.length - 1]; // last number = often the total
+
+  // ── Date ──────────────────────────────────────────────────────────────────────
+  let date = new Date().toISOString().slice(0, 10);
+  const MON = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+
+  const datePatterns = [
+    // 2026-03-04
+    { re: /(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/, fn: m => `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}` },
+    // 04-03-2026
+    { re: /(\d{1,2})[\-\/](\d{1,2})[\-\/](\d{4})/, fn: m => `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` },
+    // 4-Mar-26  OR  4-Mar-2026  (Indian invoice format)
+    { re: /(\d{1,2})[\-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[\-\s](\d{2,4})/i,
+      fn: m => {
+        let yr = parseInt(m[3]);
+        if (yr < 100) yr += 2000;
+        return `${yr}-${String(MON[m[2].slice(0,3).toLowerCase()]).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+      }
+    },
+    // 4 March 2026
+    { re: /(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{4})/i,
+      fn: m => `${m[3]}-${String(MON[m[2].slice(0,3).toLowerCase()]).padStart(2,'0')}-${m[1].padStart(2,'0')}`
+    },
+  ];
+  for (const { re, fn } of datePatterns) {
+    const m = text.match(re);
+    if (m) { try { date = fn(m); } catch(e){} break; }
   }
 
-  // ── GST ──────────────────────────────────────────────────────────────────────
+  // ── Amounts ───────────────────────────────────────────────────────────────────
+  // PRIORITY: ₹ / Rs / INR amounts → take the LARGEST (grand total is usually largest)
+  let total = 0;
+  const rupeeHits = [...text.matchAll(/(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/g)]
+    .map(m => parseFloat(m[1].replace(/,/g,'')))
+    .filter(n => n > 0);
+  if (rupeeHits.length > 0) total = Math.max(...rupeeHits);
+
+  // Tier 2: "Total" / "Grand Total" keyword + number
+  if (total === 0) {
+    const tp = [
+      /(?:grand\s*total|net\s*payable|amount\s*paid|amount\s*due|total\s*payable|net\s*total|total\s*bill)[\s:\u20b9Rs₹]*([\d,]+\.?\d{0,2})/i,
+      /(?:^|\n)\s*total[\s:\u20b9Rs₹]*([\d,]+\.?\d{0,2})/im,
+    ];
+    for (const p of tp) {
+      const m = text.match(p);
+      if (m) { const v = parseFloat(m[1].replace(/,/g,'')); if (v > 0) { total = v; break; } }
+    }
+  }
+
+  // Tier 3: largest standalone number — but EXCLUDE unit suffixes (NOS, PCS, KGS) and % rates
+  if (total === 0) {
+    const nums = [...text.matchAll(/\b([\d,]+(?:\.\d{2})?)\b(?!\s*(?:%|NOS|nos|Nos|PCS|pcs|KGS?|kgs?|units?|Nos\b))/g)]
+      .map(m => parseFloat(m[1].replace(/,/g,'')))
+      .filter(n => n >= 10 && n < 10_000_000);
+    if (nums.length) total = Math.max(...nums);
+  }
+
+  // ── GST (CGST + SGST + IGST) ──────────────────────────────────────────────────
+  // Per-line: for each line containing cgst/sgst/igst, grab LAST number (the amount, not the %)
   let gst = 0;
-  const taxPatterns = [/(?:gst|igst|sgst|cgst|service tax|tax)[\s:@\u20b9Rs₹%]*(\d[\d,]*\.?\d{0,2})/i];
-  for (const p of taxPatterns) { const m = text.match(p); if (m) { gst = parseFloat(m[1].replace(/,/g,'')); break; } }
+  const taxLines = lines.filter(l => /\b(cgst|sgst|igst|utgst)\b/i.test(l));
+  if (taxLines.length > 0) {
+    for (const tl of taxLines) {
+      const nums = [...tl.matchAll(/([\d,]+(?:\.\d{1,2})?)/g)]
+        .map(m => parseFloat(m[1].replace(/,/g,'')))
+        .filter(n => n > 0 && n < total * 0.8);  // exclude values >= 80% of total (likely the subtotal column)
+      if (nums.length) gst += nums[nums.length - 1]; // last number = amount column
+    }
+  } else {
+    // fallback single GST pattern
+    const m = text.match(/(?:gst|tax)[\s:@\u20b9Rs₹%]*(\d[\d,]*\.?\d{0,2})/i);
+    if (m) gst = parseFloat(m[1].replace(/,/g,''));
+  }
 
-  const amount = (total > 0 && gst > 0) ? +(total - gst).toFixed(2) : total;
+  const amount = (total > 0 && gst > 0 && gst < total) ? +(total - gst).toFixed(2) : total;
 
-  // ── Description ──────────────────────────────────────────────────────────────
+  // ── Description ───────────────────────────────────────────────────────────────
   let description = '';
-  const descPatterns = [/(?:description|particulars|item|service|for)[\s:]+([^\n]{5,80})/i];
-  for (const p of descPatterns) { const m = text.match(p); if (m) { description = m[1].trim(); break; } }
-  if (!description && lines.length > 1) {
-    const c = lines.slice(1,5).find(l => /[a-zA-Z]{4,}/.test(l) && l.length > 4 && l.length < 80 && !/^(date|invoice|receipt|bill|total|amount|gst)/i.test(l));
+
+  // Look for "Description of Goods" table items
+  const descSection = text.match(/description\s+of\s+goods[\s\S]{0,30}\n([\s\S]*?)(?:\n\s*(?:total|cgst|sgst|igst|amount))/i);
+  if (descSection) {
+    const itemLines = descSection[1].split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 3 && /[a-zA-Z]{3,}/.test(l) && !/^\d+$/.test(l) && !/^(hsn|sac|quantity|rate|per|nos|pcs)/i.test(l));
+    if (itemLines.length) description = itemLines.slice(0,3).join(', ');
+  }
+
+  if (!description) {
+    const m = text.match(/(?:description|particulars|item|service|for)[\s:]+([^\n]{5,80})/i);
+    if (m) description = m[1].trim();
+  }
+
+  // Fallback: first non-header line with alphabetic content
+  if (!description) {
+    const skip = /^(tax\s*invoice|delivery|invoice|receipt|bill|total|amount|gst|tax|challan|gstin|state|contact|phone|email|printed|buyer|consignee|dispatch|reference|bank|dated|no\.|from|to\s)/i;
+    const c = lines.slice(1, 10).find(l => /[a-zA-Z]{4,}/.test(l) && l.length > 4 && l.length < 100 && !skip.test(l));
     if (c) description = c;
   }
 
-  // ── Category ─────────────────────────────────────────────────────────────────
+  // ── Category ──────────────────────────────────────────────────────────────────
   let suggestedCategory = 'other';
-  if (/rapido|ola|uber|cab|taxi|auto|ride|flight|train|bus|fuel|petrol|diesel|toll|transport|porter/i.test(text)) suggestedCategory = 'travel';
-  else if (/food|restaurant|cafe|coffee|lunch|dinner|swiggy|zomato|pizza|burger|meal|water|bisleri|aqua/i.test(text)) suggestedCategory = 'consumables';
-  else if (/stationery|office|amazon|flipkart|laptop|printer|keyboard|mouse|supply/i.test(text)) suggestedCategory = 'consumables';
-  else if (/electricity|power|water supply|rent|internet|broadband|telephone|mobile|utility|bill/i.test(text)) suggestedCategory = 'overhead';
-  else if (/advance|deposit|prepaid|token|booking amount/i.test(text)) suggestedCategory = 'advance';
+  if (/rapido|ola|uber|cab|taxi|auto\s*ride|flight|train|bus|fuel|petrol|diesel|toll|transport|porter|logistics/i.test(text))
+    suggestedCategory = 'travel';
+  else if (/food|restaurant|cafe|coffee|lunch|dinner|swiggy|zomato|pizza|burger|meal|canteen|bisleri|aqua/i.test(text))
+    suggestedCategory = 'consumables';
+  else if (/stationery|office supply|amazon|flipkart|laptop|printer|keyboard|mouse|tools?|hardware|cnc|hardcut|boring|machining|turning|lathe|drill|cutting|tooling/i.test(text))
+    suggestedCategory = 'consumables';
+  else if (/electricity|power|water\s*supply|rent|internet|broadband|telephone|mobile\s*bill|utility/i.test(text))
+    suggestedCategory = 'overhead';
+  else if (/advance|deposit|prepaid|token|booking\s*amount/i.test(text))
+    suggestedCategory = 'advance';
 
   return {
-    vendor: vendor || lines[0]?.replace(/[^a-zA-Z0-9\s&.'()\-]/g,'').trim() || 'Unknown Vendor',
-    invoice_no: invoiceNo,
+    vendor:      vendor || lines[0]?.replace(/[^a-zA-Z0-9\s&.'()\-]/g,'').trim() || 'Unknown Vendor',
+    invoice_no:  invoiceNo,
     date,
-    amount: amount > 0 ? amount.toFixed(2) : total > 0 ? total.toFixed(2) : '',
-    gst: gst.toFixed(2),
-    total: total > 0 ? total.toFixed(2) : '',
+    amount:      amount > 0 ? amount.toFixed(2) : (total > 0 ? total.toFixed(2) : ''),
+    gst:         gst.toFixed(2),
+    total:       total > 0 ? total.toFixed(2) : '',
     description: description.slice(0, 200),
     suggestedCategory,
-    source: 'tesseract',
+    source:      'tesseract',
   };
 }
 
@@ -146,9 +195,15 @@ router.post('/', authenticate, upload.single('file'), async (req, res) => {
   try {
     const rawText = await runOCR(imagePath);
     if (rawText) {
+      console.log('[OCR raw]', rawText.slice(0, 500));  // debug log
       res.json(parseOCRText(rawText));
     } else {
-      res.json({ vendor:'', invoice_no:'', date: new Date().toISOString().slice(0,10), amount:'', gst:'0.00', total:'', description:'', suggestedCategory:'other', source:'manual', message:'Could not read text from image. Please fill in manually.' });
+      res.json({
+        vendor:'', invoice_no:'', date: new Date().toISOString().slice(0,10),
+        amount:'', gst:'0.00', total:'', description:'',
+        suggestedCategory:'other', source:'manual',
+        message:'Could not read text from image. Please fill in manually.',
+      });
     }
   } catch (err) {
     console.error('[OCR Route]', err.message);
