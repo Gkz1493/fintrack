@@ -117,6 +117,14 @@ router.get('/stats', authenticate, (req, res) => {
   res.json(stats);
 });
 
+/* GET /reimburse-names — unique reimburse-to names from expenses */
+router.get('/reimburse-names', authenticate, (req, res) => {
+  const names = db.prepare(
+    "SELECT DISTINCT reimburse_to_name FROM expenses WHERE reimburse_to_name IS NOT NULL AND reimburse_to_name != '' ORDER BY reimburse_to_name"
+  ).all().map(e => e.reimburse_to_name);
+  res.json(names);
+});
+
 router.post('/', authenticate, upload.single('file'), async (req, res) => {
   try {
     const { vendor,invoice_no,amount,gst,total,description,date,category,project_name,is_reimbursement,reimburse_to_id,reimburse_to_name } = req.body;
