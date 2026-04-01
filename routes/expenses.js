@@ -111,8 +111,8 @@ router.get('/stats', authenticate, (req, res) => {
   /* --- cashflow in: sum all fund_releases from project_details --- */
   let cashflowIn = 0;
   try {
-    db.prepare('SELECT fund_releases FROM project_details').all().forEach(pd => {
-      try { JSON.parse(pd.fund_releases||'[]').forEach(r => { cashflowIn += Number(r.amount)||0; }); } catch(e) {}
+    db.prepare('SELECT fund_allocated FROM project_details').all().forEach(pd => {
+      cashflowIn += Number(pd.fund_allocated) || 0;
     });
   } catch(e) {}
   const cashflowOut     = all.reduce((s,e)=>s+e.total,0);
