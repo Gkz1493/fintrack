@@ -17,11 +17,11 @@ const CAT_COLORS = {
   consumables: '#6366f1', travel: '#f59e0b', advance: '#10b981',
   overhead: '#3b82f6', other: '#8b5cf6',
 };
-const CAT_ICONS  = { consumables:'ð', travel:'ð', advance:'ð°', overhead:'ð¢', other:'ð¦' };
+const CAT_ICONS  = { consumables:'🛒', travel:'🚗', advance:'💰', overhead:'🏢', other:'📦' };
 const PROJ_COLORS = ['#6366f1','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316'];
-const fmt = n => 'â¹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const fmt = n => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
-/* ââ Download chart SVG ââââââââââââââââââââââââââââââââââââââââââââ */
+/* ── Download chart SVG ──────────────────────────────────────────── */
 function downloadSVG(containerId, filename) {
   const el = document.getElementById(containerId);
   if (!el) return;
@@ -110,10 +110,10 @@ export default function Dashboard() {
     </div>
   );
 
-  /* ââ PROJECT DRILL-DOWN VIEW âââââââââââââââââââââââââââââââââââââ */
+  /* ── PROJECT DRILL-DOWN VIEW ───────────────────────────────────── */
   if (selectedProject && projStats) {
     const catData = Object.entries(projStats.byCategory || {}).map(([cat, val]) => ({
-      name: (CAT_ICONS[cat] || 'ð¦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
+      name: (CAT_ICONS[cat] || '📦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
       value: val, color: CAT_COLORS[cat] || '#8b5cf6',
     }));
     return (
@@ -125,7 +125,7 @@ export default function Dashboard() {
           </button>
           <div>
             <h1 className="text-xl font-bold text-gray-900">{selectedProject}</h1>
-            <p className="text-sm text-gray-400">{projStats.count} expenses Â· {fmt(projStats.total)} total</p>
+            <p className="text-sm text-gray-400">{projStats.count} expenses · {fmt(projStats.total)} total</p>
           </div>
         </div>
 
@@ -147,7 +147,7 @@ export default function Dashboard() {
         {/* Expense Analytics (ThreeViz = SpendViz) */}
         <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-800 mb-3 text-sm">Expense Analytics â {selectedProject}</h3>
+            <h3 className="font-semibold text-gray-800 mb-3 text-sm">Expense Analytics — {selectedProject}</h3>
             <button onClick={() => downloadSVG('proj-viz', `${selectedProject}_analytics.svg`)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 border border-gray-200 rounded-lg px-2 py-1 transition">
               <Download size={12} /> Download
@@ -207,10 +207,10 @@ export default function Dashboard() {
           <div className="divide-y divide-gray-50">
             {(projStats.expenses || []).map(e => (
               <div key={e.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
-                <span className="text-xl">{CAT_ICONS[e.category] || 'ð¦'}</span>
+                <span className="text-xl">{CAT_ICONS[e.category] || '📦'}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-gray-800 truncate">{e.vendor}</div>
-                  <div className="text-xs text-gray-400">{e.date} Â· {e.category}</div>
+                  <div className="text-xs text-gray-400">{e.date} · {e.category}</div>
                 </div>
                 <div className="font-semibold text-sm">{fmt(e.total)}</div>
                 <span className={`badge-${e.status}`}>{e.status}</span>
@@ -222,15 +222,15 @@ export default function Dashboard() {
     );
   }
 
-  /* ââ MAIN DASHBOARD VIEW âââââââââââââââââââââââââââââââââââââââââââ */
+  /* ── MAIN DASHBOARD VIEW ─────────────────────────────────────────── */
   const byProject = projectNames.map(name => ({
-    name:     name.length > 20 ? name.slice(0,18)+'â¦' : name,
+    name:     name.length > 20 ? name.slice(0,18)+'…' : name,
     fullName: name,
     total:    expenses.filter(e => e.project_name === name).reduce((s,e) => s+e.total, 0),
   })).filter(d => d.total > 0);
 
   const byCat = Object.entries(stats?.byCategory || {}).map(([cat, val]) => ({
-    name:  (CAT_ICONS[cat] || 'ð¦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
+    name:  (CAT_ICONS[cat] || '📦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
     value: val,
     color: CAT_COLORS[cat] || '#8b5cf6',
   }));
@@ -254,7 +254,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-sm text-gray-400">Welcome back, {user?.name} ð</p>
+          <p className="text-sm text-gray-400">Welcome back, {user?.name} 👋</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => { setCompareMode(v=>!v); setCompData([]); setSelectedForComp([]); }}
@@ -327,7 +327,7 @@ export default function Dashboard() {
         </>);
       })()}
 
-      {/* ââ COMPARE MODE PANEL âââââââââââââââââââââââââââââââââââ */}
+      {/* ── COMPARE MODE PANEL ─────────────────────────────────── */}
       {compareMode && (
         <div className="card p-4 border-2 border-indigo-200 bg-indigo-50/40">
           <div className="flex items-center justify-between mb-3">
@@ -335,7 +335,7 @@ export default function Dashboard() {
             <button onClick={() => { setCompareMode(false); setCompData([]); setSelectedForComp([]); }}
               className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
           </div>
-          <p className="text-xs text-gray-500 mb-3">Select 2â4 projects, then click Compare.</p>
+          <p className="text-xs text-gray-500 mb-3">Select 2–4 projects, then click Compare.</p>
           <div className="flex flex-wrap gap-2 mb-4">
             {projectNames.map(name => {
               const sel = selectedForComp.includes(name);
@@ -352,7 +352,7 @@ export default function Dashboard() {
           </div>
           <button onClick={runCompare} disabled={selectedForComp.length < 1 || loadingComp}
             className="btn-primary text-sm px-4 py-2 disabled:opacity-40">
-            {loadingComp ? 'Loadingâ¦' : 'Compare Selected'}
+            {loadingComp ? 'Loading…' : 'Compare Selected'}
           </button>
 
           {/* Comparison charts */}
@@ -371,7 +371,7 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height={180}>
                     <BarChart data={compData}>
                       <XAxis dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                      <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `â¹${(v/1000).toFixed(0)}k`} width={44} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} width={44} tickLine={false} axisLine={false} />
                       <Tooltip formatter={v => [fmt(v), 'Total']} />
                       <Bar dataKey="total" radius={[4,4,0,0]}>
                         {compData.map((d,i) => <Cell key={i} fill={d.color} />)}
@@ -440,7 +440,7 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-gray-800 text-sm">Expense Analytics</h3>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">ð Monthly trend &amp; project breakdown</span>
+            <span className="text-xs text-gray-400">📊 Monthly trend &amp; project breakdown</span>
             <button onClick={() => downloadSVG('main-viz', 'expense_analytics.svg')}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 border border-gray-200 rounded-lg px-2 py-1">
               <Download size={12} /> Download
@@ -466,7 +466,7 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={byProject} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `â¹${(v/1000).toFixed(0)}k`} width={42} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} width={42} />
                 <Tooltip formatter={v => [fmt(v), 'Total']} cursor={{ fill: '#f3f4ff' }} />
                 <Bar dataKey="total" fill="#6366f1" radius={[4,4,0,0]}
                   onClick={d => drillDown(d.fullName)} className="cursor-pointer" />
@@ -502,8 +502,8 @@ export default function Dashboard() {
       {pendingEmps.length > 0 && (
         <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-800 text-sm">â ï¸ Pending Reimbursements</h3>
-            <button onClick={() => navigate('/reimbursements')} className="text-xs text-indigo-600 hover:underline">Manage â</button>
+            <h3 className="font-semibold text-gray-800 text-sm">⚠️ Pending Reimbursements</h3>
+            <button onClick={() => navigate('/reimbursements')} className="text-xs text-indigo-600 hover:underline">Manage →</button>
           </div>
           <div className="flex flex-wrap gap-3">
             {pendingEmps.map(([name, d]) => (
@@ -525,7 +525,7 @@ export default function Dashboard() {
       <div className="card">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-semibold text-gray-800 text-sm">Projects</h3>
-          <button onClick={() => navigate('/projects')} className="text-xs text-indigo-600 hover:underline">View all â</button>
+          <button onClick={() => navigate('/projects')} className="text-xs text-indigo-600 hover:underline">View all →</button>
         </div>
         <div className="divide-y divide-gray-50">
           {byProject.map(p => (
