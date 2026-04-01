@@ -108,7 +108,23 @@ router.get('/', authenticate, (req, res) => {
 
 router.get('/stats', authenticate, (req, res) => {
   const all = db.prepare('SELECT * FROM expenses').all();
-  const stats = { total: all.reduce((s,e)=>s+e.total,0), pendingReimb: all.filter(e=>e.is_reimbursement&&e.status==='pending').reduce((s,e)=>s+e.total,0), count: all.length, pending: all.filter(e=>e.status==='pending').length, byProject:{}, byCategory:{}, byEmployee:{} };
+  /* --- cashflow in: sum all fund_releases from project_details --- */
+  let cashflowIn = 0;
+  try {
+    db.prepare('SELECT fund_releases FROM project_details').all().forEach(pd => {
+      try { JSON.parse(pd.fund_releases||'[]').forEach(r => { cashflowIn += Number(r.amount)||0; }); } catch(e) {}
+    });
+  } catch(e) {}
+  const cashflowOut     = all.reduce((s,e)=>s+e.total,0);
+  const pendingApproval = all.filter(e=>e.status==='pending').length;
+  const projectCount    = new Set(all.map(e=>e.project_name).filter(Boolean)).size;
+  const stats = {
+    total: cashflowOut, cashflowIn, cashflowOut,
+    availableBalance: cashflowIn - cashflowOut,
+    pendingReimb: all.filter(e=>e.is_reimbursement&&e.status==='pending').reduce((s,e)=>s+e.total,0),
+    count: all.length, pending: pendingApproval, pendingApproval, projectCount,
+    byProject:{}, byCategory:{}, byEmployee:{}
+  };
   all.forEach(e => {
     stats.byProject[e.project_name]=(stats.byProject[e.project_name]||0)+e.total;
     stats.byCategory[e.category]=(stats.byCategory[e.category]||0)+e.total;
@@ -117,7 +133,7 @@ router.get('/stats', authenticate, (req, res) => {
   res.json(stats);
 });
 
-/* GET /reimburse-names — unique reimburse-to names from expenses */
+/* GET /reimburse-names â unique reimburse-to names from expenses */
 router.get('/reimburse-names', authenticate, (req, res) => {
   const names = db.prepare(
     "SELECT DISTINCT reimburse_to_name FROM expenses WHERE reimburse_to_name IS NOT NULL AND reimburse_to_name != '' ORDER BY reimburse_to_name"
@@ -186,9 +202,9 @@ router.get('/export/pdf',authenticate,(req,res)=>{
   const{jsPDF}=require('jspdf');require('jspdf-autotable');
   const expenses=req.user.role==='admin'?db.prepare('SELECT * FROM expenses ORDER BY created_at DESC').all():db.prepare('SELECT * FROM expenses WHERE uploaded_by_id=? ORDER BY created_at DESC').all(req.user.id);
   const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
-  doc.setFontSize(18);doc.text('FinTrack — Expense Report',14,20);
-  doc.setFontSize(10);doc.text(`Generated: ${new Date().toLocaleString()}  |  Total: ₹${expenses.reduce((s,e)=>s+e.total,0).toLocaleString('en-IN')}`,14,28);
-  doc.autoTable({startY:34,head:[['Date','Vendor','Category','Project','Amount','GST','Total','Reimburse To','Status']],body:expenses.map(e=>[e.date,e.vendor,e.category,e.project_name||'',`₹${e.amount}`,`₹${e.gst}`,`₹${e.total}`,e.reimburse_to_name||'—',e.status]),styles:{fontSize:8},headStyles:{fillColor:[99,102,241]},alternateRowStyles:{fillColor:[248,249,255]}});
+  doc.setFontSize(18);doc.text('FinTrack â Expense Report',14,20);
+  doc.setFontSize(10);doc.text(`Generated: ${new Date().toLocaleString()}  |  Total: â¹${expenses.reduce((s,e)=>s+e.total,0).toLocaleString('en-IN')}`,14,28);
+  doc.autoTable({startY:34,head:[['Date','Vendor','Category','Project','Amount','GST','Total','Reimburse To','Status']],body:expenses.map(e=>[e.date,e.vendor,e.category,e.project_name||'',`â¹${e.amount}`,`â¹${e.gst}`,`â¹${e.total}`,e.reimburse_to_name||'â',e.status]),styles:{fontSize:8},headStyles:{fillColor:[99,102,241]},alternateRowStyles:{fillColor:[248,249,255]}});
   const pdfBuffer=Buffer.from(doc.output('arraybuffer'));
   res.setHeader('Content-Disposition','attachment; filename=FinTrack_Expenses.pdf');
   res.setHeader('Content-Type','application/pdf');
