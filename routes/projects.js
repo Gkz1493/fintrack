@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const db         = require('../db');
 const { authenticate } = require('../middleware/auth');
 
-/* âââ GET /all-names  (must be BEFORE /:id routes) âââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ GET /all-names  (must be BEFORE /:id routes) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.get('/all-names', authenticate, (req, res) => {
   try {
     const fromDb  = db.prepare('SELECT name FROM projects ORDER BY name').all().map(p => p.name);
@@ -16,7 +16,7 @@ router.get('/all-names', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ GET /stats-by-name/:name  (freeform project names) âââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ GET /stats-by-name/:name  (freeform project names) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.get('/stats-by-name/:name', authenticate, (req, res) => {
   try {
     const name     = req.params.name;
@@ -26,13 +26,24 @@ router.get('/stats-by-name/:name', authenticate, (req, res) => {
     const pendingReimb = expenses
       .filter(e => e.is_reimbursement && e.status === 'pending')
       .reduce((s,e) => s + e.total, 0);
+    const pendingApproval = expenses.filter(e => e.status === 'pending').length;
     const byCategory = {};
     expenses.forEach(e => { byCategory[e.category] = (byCategory[e.category]||0) + e.total; });
-    res.json({ name, total, count, pendingReimb, byCategory, expenses });
+    /* --- fund data from project_details --- */
+    let cashflowIn = 0, fundAllocated = 0;
+    try {
+      const detail = db.prepare('SELECT fund_releases, fund_allocated FROM project_details WHERE project_name = ?').get(name);
+      if (detail) {
+        fundAllocated = Number(detail.fund_allocated || 0);
+        JSON.parse(detail.fund_releases || '[]').forEach(r => { cashflowIn += Number(r.amount) || 0; });
+      }
+    } catch(e) {}
+    const availableBalance = fundAllocated - total;
+    res.json({ name, total, count, pendingReimb, pendingApproval, byCategory, expenses, cashflowIn, fundAllocated, availableBalance });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ GET /  (all projects) âââââââââââââââââââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ GET /  (all projects) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.get('/', authenticate, (req, res) => {
   try {
     const projects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
@@ -40,7 +51,7 @@ router.get('/', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ GET /:id/stats  (must be BEFORE /:id) âââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ GET /:id/stats  (must be BEFORE /:id) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.get('/:id/stats', authenticate, (req, res) => {
   try {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
@@ -59,7 +70,7 @@ router.get('/:id/stats', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ GET /:id âââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ GET /:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.get('/:id', authenticate, (req, res) => {
   try {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
@@ -70,7 +81,7 @@ router.get('/:id', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ POST /  (create) ââââââââââââââââââââââââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ POST /  (create) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.post('/', authenticate, (req, res) => {
   try {
     const { name, description } = req.body;
@@ -84,7 +95,7 @@ router.post('/', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ PUT /:id âââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ PUT /:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.put('/:id', authenticate, (req, res) => {
   try {
     const { name, description } = req.body;
@@ -93,7 +104,7 @@ router.put('/:id', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* âââ DELETE /:id âââââââââââââââââââââââââââââââââââââââââââââââââ */
+/* Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ DELETE /:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ */
 router.delete('/:id', authenticate, (req, res) => {
   try {
     db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
