@@ -3,9 +3,9 @@ import { Search, FileSpreadsheet, FileText, Trash2, ExternalLink } from 'lucide-
 import { getExpenses, getProjectNames, getReimburseNames, updateStatus, deleteExpense, exportExcel, exportPdf } from '../api';
 import { useAuth } from '../context/AuthContext';
 
-const CATS      = { consumables:'🛒', travel:'🚗', advance:'💰', overhead:'🏢', other:'📦' };
+const CATS      = { consumables:'ð', travel:'ð', advance:'ð°', overhead:'ð¢', other:'ð¦' };
 const CAT_COLORS = { consumables:'#6366f1', travel:'#f59e0b', advance:'#10b981', overhead:'#3b82f6', other:'#8b5cf6' };
-const fmt = n => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 });
+const fmt = n => 'â¹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
 export default function Expenses() {
   const { isAdmin } = useAuth();
@@ -73,13 +73,13 @@ export default function Expenses() {
           <div className="relative flex-1" style={{ minWidth: 160 }}>
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
-              placeholder="Search…"
+              placeholder="Searchâ¦"
               value={filters.search}
               onChange={e => setFlt(p => ({...p, search: e.target.value}))}
               className="input pl-8 py-2 text-sm"
             />
           </div>
-          {/* Project filter — uses ALL project names including freeform */}
+          {/* Project filter â uses ALL project names including freeform */}
           <select value={filters.project} onChange={e => setFlt(p => ({...p, project: e.target.value}))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
             <option value="">All Projects</option>
@@ -101,7 +101,7 @@ export default function Expenses() {
               <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>
             ))}
           </select>
-          {/* Employee filter — uses ALL reimbursement names including manually typed */}
+          {/* Employee filter â uses ALL reimbursement names including manually typed */}
           <select value={filters.employee} onChange={e => setFlt(p => ({...p, employee: e.target.value}))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
             <option value="">All Employees</option>
@@ -127,7 +127,7 @@ export default function Expenses() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Date','Vendor','Category','Project','Amount','Reimburse To','Status','Receipt',isAdmin&&'Actions'].filter(Boolean).map(h => (
+                  {['Date','Vendor','Category','Project','Amount','Receipt',isAdmin&&'Actions'].filter(Boolean).map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -142,7 +142,7 @@ export default function Expenses() {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className="flex items-center gap-1 text-xs font-medium" style={{ color: CAT_COLORS[e.category]||'#8b5cf6' }}>
-                        {CATS[e.category]||'📦'} {e.category}
+                        {CATS[e.category]||'ð¦'} {e.category}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-xs truncate">{e.project_name}</td>
@@ -150,24 +150,8 @@ export default function Expenses() {
                       {fmt(e.total)}
                       {e.gst > 0 && <div className="text-xs text-gray-400 font-normal">GST: {fmt(e.gst)}</div>}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {e.reimburse_to_name
-                        ? <span className="text-amber-600 font-medium">{e.reimburse_to_name}</span>
-                        : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {isAdmin ? (
-                        <select value={e.status} onChange={ev => changeStatus(e.id, ev.target.value)}
-                          className={`text-xs px-2 py-1 rounded-full font-medium border-0 cursor-pointer focus:outline-none badge-${e.status}`}>
-                          <option value="pending">Pending</option>
-                          <option value="approved">Approved</option>
-                          <option value="paid">Paid</option>
-                          <option value="rejected">Rejected</option>
-                        </select>
-                      ) : (
-                        <span className={`badge-${e.status}`}>{e.status}</span>
-                      )}
-                    </td>
+                    
+                    
                     <td className="px-4 py-3 whitespace-nowrap">
                       {e.drive_url ? (
                         <a href={e.drive_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-indigo-600 hover:underline">
@@ -176,7 +160,7 @@ export default function Expenses() {
                       ) : e.file_path ? (
                         <a href={e.file_path} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View</a>
                       ) : (
-                        <span className="text-gray-300 text-xs">—</span>
+                        <span className="text-gray-300 text-xs">â</span>
                       )}
                     </td>
                     {isAdmin && (
