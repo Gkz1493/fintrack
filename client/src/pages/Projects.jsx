@@ -16,7 +16,7 @@ const CAT_COLORS = {
   overhead: '#3b82f6', other: '#8b5cf6',
 };
 const CAT_ICONS = { consumables:'ð§¾', travel:'âï¸', advance:'ð°', overhead:'ð¢', other:'ð¦' };
-const fmt = n => 'â¹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const fmt = n => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 function dlSVG(id, name) {
   const svg = document.querySelector(`#${id} svg`);
@@ -173,7 +173,7 @@ export default function Projects() {
                   <button onClick={() => setEditMode(false)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {[['client_name','Client Name','text'],['mobile','Mobile','tel'],['email','Email','email'],['fund_allocated','Fund Allocated (â¹)','number']].map(([key, label, type]) => (
+                  {[['client_name','Client Name','text'],['mobile','Mobile','tel'],['email','Email','email'],['fund_allocated','Fund Allocated (₹)','number']].map(([key, label, type]) => (
                     <div key={key}>
                       <label className="text-xs text-gray-500 mb-1 block">{label}</label>
                       <input type={type} value={detailsForm[key] || ''} onChange={e => setDetailsForm(f => ({ ...f, [key]: e.target.value }))}
@@ -203,7 +203,7 @@ export default function Projects() {
                     {(detailsForm.fund_releases || []).map((r, i) => (
                       <div key={i} className="flex gap-2 items-center">
                         <input type="date" value={r.date || ''} onChange={e => updateRelease(i, 'date', e.target.value)} className="input text-sm py-1.5 w-36" />
-                        <input type="number" value={r.amount || ''} onChange={e => updateRelease(i, 'amount', e.target.value)} className="input text-sm py-1.5 w-32" placeholder="Amount (â¹)" />
+                        <input type="number" value={r.amount || ''} onChange={e => updateRelease(i, 'amount', e.target.value)} className="input text-sm py-1.5 w-32" placeholder="Amount (₹)" />
                         <input type="text" value={r.note || ''} onChange={e => updateRelease(i, 'note', e.target.value)} className="input text-sm py-1.5 flex-1" placeholder="Note (optional)" />
                         <button onClick={() => removeRelease(i)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
                       </div>
@@ -301,7 +301,7 @@ export default function Projects() {
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart data={catData} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
                         <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} />
-                        <YAxis tick={{ fontSize: 10 }} tickFormatter={v => 'â¹' + (v / 1000).toFixed(0) + 'k'} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={v => '₹' + (v / 1000).toFixed(0) + 'k'} />
                         <Tooltip formatter={v => [fmt(v), 'Amount']} />
                         <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                           {catData.map((e, i) => <Cell key={i} fill={e.color} />)}
