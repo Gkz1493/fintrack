@@ -3,9 +3,9 @@ import { Search, FileSpreadsheet, FileText, Trash2, ExternalLink } from 'lucide-
 import { getExpenses, getProjectNames, getReimburseNames, updateStatus, deleteExpense, exportExcel, exportPdf } from '../api';
 import { useAuth } from '../context/AuthContext';
 
-const CATS      = { consumables:'ð', travel:'ð', advance:'ð°', overhead:'ð¢', other:'ð¦' };
+const CATS      = { consumables:'🛒', travel:'🚗', advance:'💰', overhead:'🏢', other:'📦' };
 const CAT_COLORS = { consumables:'#6366f1', travel:'#f59e0b', advance:'#10b981', overhead:'#3b82f6', other:'#8b5cf6' };
-const fmt = n => 'â¹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 });
+const fmt = n => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
 export default function Expenses() {
   const { isAdmin } = useAuth();
@@ -73,13 +73,13 @@ export default function Expenses() {
           <div className="relative flex-1" style={{ minWidth: 160 }}>
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
-              placeholder="Searchâ¦"
+              placeholder="Search…"
               value={filters.search}
               onChange={e => setFlt(p => ({...p, search: e.target.value}))}
               className="input pl-8 py-2 text-sm"
             />
           </div>
-          {/* Project filter â uses ALL project names including freeform */}
+          {/* Project filter — uses ALL project names including freeform */}
           <select value={filters.project} onChange={e => setFlt(p => ({...p, project: e.target.value}))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
             <option value="">All Projects</option>
@@ -101,7 +101,7 @@ export default function Expenses() {
               <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>
             ))}
           </select>
-          {/* Employee filter â uses ALL reimbursement names including manually typed */}
+          {/* Employee filter — uses ALL reimbursement names including manually typed */}
           <select value={filters.employee} onChange={e => setFlt(p => ({...p, employee: e.target.value}))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
             <option value="">All Employees</option>
@@ -142,7 +142,7 @@ export default function Expenses() {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className="flex items-center gap-1 text-xs font-medium" style={{ color: CAT_COLORS[e.category]||'#8b5cf6' }}>
-                        {CATS[e.category]||'ð¦'} {e.category}
+                        {CATS[e.category]||'📦'} {e.category}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap max-w-xs truncate">{e.project_name}</td>
@@ -160,7 +160,7 @@ export default function Expenses() {
                       ) : e.file_path ? (
                         <a href={e.file_path} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View</a>
                       ) : (
-                        <span className="text-gray-300 text-xs">â</span>
+                        <span className="text-gray-300 text-xs">—</span>
                       )}
                     </td>
                     {isAdmin && (
