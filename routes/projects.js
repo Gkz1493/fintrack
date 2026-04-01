@@ -35,7 +35,7 @@ router.get('/stats-by-name/:name', authenticate, (req, res) => {
       const detail = db.prepare('SELECT fund_releases, fund_allocated FROM project_details WHERE project_name = ?').get(name);
       if (detail) {
         fundAllocated = Number(detail.fund_allocated || 0);
-        JSON.parse(detail.fund_releases || '[]').forEach(r => { cashflowIn += Number(r.amount) || 0; });
+        cashflowIn    = fundAllocated;
       }
     } catch(e) {}
     const availableBalance = fundAllocated - total;
