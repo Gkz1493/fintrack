@@ -15,8 +15,8 @@ const CAT_COLORS = {
   consumables: '#6366f1', travel: '#f59e0b', advance: '#10b981',
   overhead: '#3b82f6', other: '#8b5cf6',
 };
-const CAT_ICONS = { consumables:'🧾', travel:'✈️', advance:'💰', overhead:'🏢', other:'📦' };
-const fmt = n => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const CAT_ICONS = { consumables:'ð§¾', travel:'âï¸', advance:'ð°', overhead:'ð¢', other:'ð¦' };
+const fmt = n => 'â¹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 function dlSVG(id, name) {
   const svg = document.querySelector(`#${id} svg`);
@@ -99,11 +99,11 @@ export default function Projects() {
   const removeRelease = i =>
     setDetailsForm(f => ({ ...f, fund_releases: f.fund_releases.filter((_, idx) => idx !== i) }));
 
-  /* ── PROJECT DETAIL VIEW ──────────────────────────────── */
+  /* ââ PROJECT DETAIL VIEW ââââââââââââââââââââââââââââââââ */
   if (selected) {
     const catData = stats
       ? Object.entries(stats.byCategory || {}).map(([cat, val]) => ({
-          name:  (CAT_ICONS[cat] || '📦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
+          name:  (CAT_ICONS[cat] || 'ð¦') + ' ' + cat.charAt(0).toUpperCase() + cat.slice(1),
           value: val,
           color: CAT_COLORS[cat] || '#8b5cf6',
         }))
@@ -113,7 +113,7 @@ export default function Projects() {
     const totalReleased  = fundReleases.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const fundAllocated  = Number(details?.fund_allocated || 0);
     const totalSpent     = stats?.total || 0;
-    const balance        = totalReleased - totalSpent;
+    const balance        = fundAllocated - totalSpent;
 
     return (
       <div className="p-4 md:p-6 page-enter max-w-5xl mx-auto space-y-5">
@@ -130,7 +130,7 @@ export default function Projects() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900">{selected}</h1>
-              {stats && <p className="text-sm text-gray-400">{stats.count} bills · {fmt(stats.total)} total</p>}
+              {stats && <p className="text-sm text-gray-400">{stats.count} bills Â· {fmt(stats.total)} total</p>}
             </div>
           </div>
           <button
@@ -173,7 +173,7 @@ export default function Projects() {
                   <button onClick={() => setEditMode(false)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {[['client_name','Client Name','text'],['mobile','Mobile','tel'],['email','Email','email'],['fund_allocated','Fund Allocated (₹)','number']].map(([key, label, type]) => (
+                  {[['client_name','Client Name','text'],['mobile','Mobile','tel'],['email','Email','email'],['fund_allocated','Fund Allocated (â¹)','number']].map(([key, label, type]) => (
                     <div key={key}>
                       <label className="text-xs text-gray-500 mb-1 block">{label}</label>
                       <input type={type} value={detailsForm[key] || ''} onChange={e => setDetailsForm(f => ({ ...f, [key]: e.target.value }))}
@@ -183,13 +183,13 @@ export default function Projects() {
                   <div className="md:col-span-2">
                     <label className="text-xs text-gray-500 mb-1 block">Company Address</label>
                     <textarea value={detailsForm.address || ''} onChange={e => setDetailsForm(f => ({ ...f, address: e.target.value }))}
-                      className="input w-full text-sm py-2 resize-none" rows={2} placeholder="Company address…" />
+                      className="input w-full text-sm py-2 resize-none" rows={2} placeholder="Company addressâ¦" />
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-xs text-gray-500 mb-1 block">Google Drive Folder Link</label>
                     <input type="url" value={detailsForm.drive_folder_url || ''}
                       onChange={e => setDetailsForm(f => ({ ...f, drive_folder_url: e.target.value }))}
-                      className="input w-full text-sm py-2" placeholder="https://drive.google.com/drive/folders/…" />
+                      className="input w-full text-sm py-2" placeholder="https://drive.google.com/drive/folders/â¦" />
                   </div>
                 </div>
                 <div>
@@ -203,7 +203,7 @@ export default function Projects() {
                     {(detailsForm.fund_releases || []).map((r, i) => (
                       <div key={i} className="flex gap-2 items-center">
                         <input type="date" value={r.date || ''} onChange={e => updateRelease(i, 'date', e.target.value)} className="input text-sm py-1.5 w-36" />
-                        <input type="number" value={r.amount || ''} onChange={e => updateRelease(i, 'amount', e.target.value)} className="input text-sm py-1.5 w-32" placeholder="Amount (₹)" />
+                        <input type="number" value={r.amount || ''} onChange={e => updateRelease(i, 'amount', e.target.value)} className="input text-sm py-1.5 w-32" placeholder="Amount (â¹)" />
                         <input type="text" value={r.note || ''} onChange={e => updateRelease(i, 'note', e.target.value)} className="input text-sm py-1.5 flex-1" placeholder="Note (optional)" />
                         <button onClick={() => removeRelease(i)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
                       </div>
@@ -301,7 +301,7 @@ export default function Projects() {
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart data={catData} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
                         <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} />
-                        <YAxis tick={{ fontSize: 10 }} tickFormatter={v => '₹' + (v / 1000).toFixed(0) + 'k'} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={v => 'â¹' + (v / 1000).toFixed(0) + 'k'} />
                         <Tooltip formatter={v => [fmt(v), 'Amount']} />
                         <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                           {catData.map((e, i) => <Cell key={i} fill={e.color} />)}
@@ -355,11 +355,11 @@ export default function Projects() {
                     <div key={e.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
                       <div className="w-9 h-9 rounded-lg flex items-center justify-center text-lg shrink-0"
                         style={{ background: (CAT_COLORS[e.category] || '#8b5cf6') + '18' }}>
-                        {CAT_ICONS[e.category] || '📦'}
+                        {CAT_ICONS[e.category] || 'ð¦'}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-gray-800 truncate">{e.vendor}</div>
-                        <div className="text-xs text-gray-400">{e.date} · {e.category}</div>
+                        <div className="text-xs text-gray-400">{e.date} Â· {e.category}</div>
                       </div>
                       <div className="text-right shrink-0">
                         <div className="font-semibold text-sm text-gray-900">{fmt(e.total)}</div>
@@ -381,7 +381,7 @@ export default function Projects() {
     );
   }
 
-  /* ── PROJECT LIST / FOLDER VIEW ─────────────────────────── */
+  /* ââ PROJECT LIST / FOLDER VIEW âââââââââââââââââââââââââââ */
   return (
     <div className="p-4 md:p-6 page-enter max-w-5xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
@@ -391,7 +391,7 @@ export default function Projects() {
 
       <div className="relative">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input placeholder="Search projects…" value={search} onChange={e => setSearch(e.target.value)}
+        <input placeholder="Search projectsâ¦" value={search} onChange={e => setSearch(e.target.value)}
           className="input pl-9 py-2.5 text-sm w-full" />
       </div>
 
