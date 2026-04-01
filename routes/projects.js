@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const db         = require('../db');
 const { authenticate } = require('../middleware/auth');
 
-/* ─── GET /all-names  (must be BEFORE /:id routes) ─────────────── */
+/* âââ GET /all-names  (must be BEFORE /:id routes) âââââââââââââââ */
 router.get('/all-names', authenticate, (req, res) => {
   try {
     const fromDb  = db.prepare('SELECT name FROM projects ORDER BY name').all().map(p => p.name);
@@ -16,7 +16,7 @@ router.get('/all-names', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── GET /stats-by-name/:name  (freeform project names) ───────── */
+/* âââ GET /stats-by-name/:name  (freeform project names) âââââââââ */
 router.get('/stats-by-name/:name', authenticate, (req, res) => {
   try {
     const name     = req.params.name;
@@ -32,7 +32,7 @@ router.get('/stats-by-name/:name', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── GET /  (all projects) ─────────────────────────────────────── */
+/* âââ GET /  (all projects) âââââââââââââââââââââââââââââââââââââââ */
 router.get('/', authenticate, (req, res) => {
   try {
     const projects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
@@ -40,7 +40,7 @@ router.get('/', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── GET /:id/stats  (must be BEFORE /:id) ─────────────────────── */
+/* âââ GET /:id/stats  (must be BEFORE /:id) âââââââââââââââââââââââ */
 router.get('/:id/stats', authenticate, (req, res) => {
   try {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
@@ -59,7 +59,7 @@ router.get('/:id/stats', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── GET /:id ───────────────────────────────────────────────────── */
+/* âââ GET /:id âââââââââââââââââââââââââââââââââââââââââââââââââââââ */
 router.get('/:id', authenticate, (req, res) => {
   try {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
@@ -70,7 +70,7 @@ router.get('/:id', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── POST /  (create) ──────────────────────────────────────────── */
+/* âââ POST /  (create) ââââââââââââââââââââââââââââââââââââââââââââ */
 router.post('/', authenticate, (req, res) => {
   try {
     const { name, description } = req.body;
@@ -84,7 +84,7 @@ router.post('/', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── PUT /:id ───────────────────────────────────────────────────── */
+/* âââ PUT /:id âââââââââââââââââââââââââââââââââââââââââââââââââââââ */
 router.put('/:id', authenticate, (req, res) => {
   try {
     const { name, description } = req.body;
@@ -93,11 +93,49 @@ router.put('/:id', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ─── DELETE /:id ───────────────────────────────────────────────── */
+/* âââ DELETE /:id âââââââââââââââââââââââââââââââââââââââââââââââââ */
 router.delete('/:id', authenticate, (req, res) => {
   try {
     db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
     res.json({ message: 'Project deleted' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+/* --- GET /details/:name ------------------------------------ */
+router.get('/details/:name', authenticate, (req, res) => {
+  try {
+    const row = db.prepare('SELECT * FROM project_details WHERE project_name = ?').get(req.params.name);
+    if (!row) return res.json(null);
+    try { row.fund_releases = JSON.parse(row.fund_releases || '[]'); } catch(e) { row.fund_releases = []; }
+    res.json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* --- POST /details  (upsert) ------------------------------ */
+router.post('/details', authenticate, (req, res) => {
+  try {
+    const { project_name, client_name, mobile, email, address, fund_allocated, fund_releases, drive_folder_url } = req.body;
+    if (!project_name) return res.status(400).json({ error: 'project_name required' });
+    const relJson = JSON.stringify(Array.isArray(fund_releases) ? fund_releases : []);
+    const crypto = require('crypto');
+    const newId = crypto.randomBytes(8).toString('hex');
+    db.prepare(`
+      INSERT INTO project_details (id, project_name, client_name, mobile, email, address, fund_allocated, fund_releases, drive_folder_url, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(project_name) DO UPDATE SET
+        client_name      = excluded.client_name,
+        mobile           = excluded.mobile,
+        email            = excluded.email,
+        address          = excluded.address,
+        fund_allocated   = excluded.fund_allocated,
+        fund_releases    = excluded.fund_releases,
+        drive_folder_url = excluded.drive_folder_url,
+        updated_at       = datetime('now')
+    `).run(newId, project_name, client_name||null, mobile||null, email||null, address||null, Number(fund_allocated)||0, relJson, drive_folder_url||null);
+    const row = db.prepare('SELECT * FROM project_details WHERE project_name = ?').get(project_name);
+    try { row.fund_releases = JSON.parse(row.fund_releases || '[]'); } catch(e) { row.fund_releases = []; }
+    res.json(row);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
