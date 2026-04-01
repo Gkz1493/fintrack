@@ -71,6 +71,13 @@ export default function Dashboard() {
   };
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    if (!selectedProjectFilter) { setFilterStats(null); return; }
+    getProjectStatsByName(selectedProjectFilter)
+      .then(r => setFilterStats(r.data))
+      .catch(() => setFilterStats(null));
+  }, [selectedProjectFilter]);
+
   /* Drill into any project by name (works for both DB and freeform) */
   const drillDown = async (projectName) => {
     try {
@@ -262,54 +269,62 @@ export default function Dashboard() {
 
       {/* Project filter pills */}
       <div className="flex flex-wrap gap-2 items-center">
-        <span className="text-xs text-gray-400 font-medium mr-1">Filter by project:</span>
-        <button
-          onClick={() => setSelectedProjectFilter(null)}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-            !selectedProjectFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-300'
-          }`}>
+        <span className="text-xs text-gray-500 font-semibold mr-2">Filter:</span>
+        <button onClick={() => setSelectedProjectFilter(null)}
+          className={`px-3 py-1 rounded-full text-xs font-semibold border transition ${!selectedProjectFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-300'}`}>
           All Projects
         </button>
         {projectNames.map(name => (
-          <button key={name}
-            onClick={() => setSelectedProjectFilter(prev => prev === name ? null : name)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-              name === selectedProjectFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-300'
-            }`}>
+          <button key={name} onClick={() => setSelectedProjectFilter(p => p === name ? null : name)}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition ${name === selectedProjectFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-300'}`}>
             {name}
           </button>
         ))}
       </div>
 
-      {/* KPI cards */}
+      {/* KPI row 1 — cashflow */}
       {(() => {
-        const s       = (selectedProjectFilter && filterStats) ? filterStats : (stats || {});
+        const active  = !!(selectedProjectFilter && filterStats);
+        const s       = active ? filterStats : (stats || {});
         const cashIn  = Number(s.cashflowIn  || 0);
-        const cashOut = Number(selectedProjectFilter ? (s.total || 0) : (s.cashflowOut || s.total || 0));
-        const balance = selectedProjectFilter ? Number(s.availableBalance ?? (cashIn - cashOut)) : Number(s.availableBalance ?? (cashIn - cashOut));
+        const cashOut = Number(active ? (s.total || 0) : (s.cashflowOut || s.total || 0));
+        const balance = s.availableBalance !== undefined ? Number(s.availableBalance) : (cashIn - cashOut);
         const pendReim  = Number(s.pendingReimb || 0);
-        const pendAppr  = Number(s.pendingApproval || s.pending || 0);
-        const projCount = selectedProjectFilter ? 1 : (s.projectCount || projectNames.length);
-        const billCount = selectedProjectFilter ? (filterStats?.count || 0) : expenses.length;
-        return (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        const pendAppr  = Number(active ? (s.pendingApproval || 0) : (s.pendingApproval || s.pending || 0));
+        const projCount = active ? 1 : (s.projectCount || projectNames.length);
+        const billCount = active ? (filterStats?.count || 0) : expenses.length;
+        const r = n => '₹' + Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+        return (<>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {[
-              { label:'Cashflow In',       value: fmt(cashIn),    sub: 'fund releases',    color:'text-emerald-600', bg:'bg-emerald-50' },
-              { label:'Cashflow Out',      value: fmt(cashOut),   sub: `${billCount} bills`, color:'text-rose-600',    bg:'bg-rose-50'   },
-              { label:'Available Balance', value: fmt(balance),   sub: balance >= 0 ? 'surplus' : 'deficit',
-                color: balance >= 0 ? 'text-indigo-600' : 'text-red-600' },
-              { label:'Pending Reimb.',    value: fmt(pendReim),  sub: 'awaiting payment', color:'text-amber-600',   bg:'bg-amber-50'  },
-              { label:'Projects',          value: projCount,      sub: selectedProjectFilter || 'tracked', color:'text-blue-600', bg:'bg-blue-50' },
-              { label:'Pending Approval',  value: pendAppr,       sub: 'bills',            color:'text-orange-600',  bg:'bg-orange-50' },
+              { label:'Cashflow In',       value: r(cashIn),  sub:'fund releases',   color:'text-emerald-600', bl:'border-emerald-400' },
+              { label:'Cashflow Out',      value: r(cashOut), sub:`${billCount} bills`, color:'text-rose-600',    bl:'border-rose-400'    },
+              { label:'Available Balance', value: r(balance) + (balance < 0 ? ' ↓' : ' ↑'),
+                sub: balance >= 0 ? 'surplus' : 'deficit',
+                color: balance >= 0 ? 'text-indigo-600' : 'text-red-600',
+                bl:    balance >= 0 ? 'border-indigo-400' : 'border-red-400' },
             ].map(c => (
-              <div key={c.label} className="card p-4">
+              <div key={c.label} className={`card p-5 border-l-4 ${c.bl}`}>
                 <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${c.color}`}>{c.label}</div>
                 <div className={`text-2xl font-bold ${c.color}`}>{c.value}</div>
                 <div className="text-xs text-gray-400 mt-0.5">{c.sub}</div>
               </div>
             ))}
           </div>
-        );
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label:'Pending Reimb.',   value: r(pendReim), sub:'awaiting payment', color:'text-amber-600',  bl:'border-amber-400'  },
+              { label:'Projects',         value: projCount,   sub: selectedProjectFilter || 'tracked', color:'text-blue-600',  bl:'border-blue-400'   },
+              { label:'Pending Approval', value: pendAppr,    sub:'bills',            color:'text-orange-600', bl:'border-orange-400' },
+            ].map(c => (
+              <div key={c.label} className={`card p-4 border-l-4 ${c.bl}`}>
+                <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${c.color}`}>{c.label}</div>
+                <div className={`text-2xl font-bold ${c.color}`}>{c.value}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{c.sub}</div>
+              </div>
+            ))}
+          </div>
+        </>);
       })()}
 
       {/* ââ COMPARE MODE PANEL âââââââââââââââââââââââââââââââââââ */}
