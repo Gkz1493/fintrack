@@ -73,4 +73,18 @@ router.get('/users', authenticate, adminOnly, (req, res) => {
   res.json(users);
 });
 
+
+/* ONE-TIME password reset - remove after use */
+router.post('/reset-pw', async (req, res) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    const { email, newPassword } = req.body;
+    if (!email || !newPassword) return res.status(400).json({ error: 'email and newPassword required' });
+    const hash = await bcrypt.hash(newPassword, 10);
+    const result = db.prepare('UPDATE users SET password = ? WHERE email = ?').run(hash, email);
+    if (result.changes === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, message: 'Password updated' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
