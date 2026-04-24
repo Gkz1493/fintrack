@@ -143,7 +143,7 @@ router.get('/reimburse-names', authenticate, (req, res) => {
 
 router.post('/', authenticate, upload.single('file'), async (req, res) => {
   try {
-    const { vendor,invoice_no,amount,gst,total,description,date,category,project_name,is_reimbursement,reimburse_to_id,reimburse_to_name } = req.body;
+    const { vendor,invoice_no,amount,gst,total,description,date,category,project_name,is_reimbursement,reimburse_to_id,reimburse_to_name,advance_paid } = req.body;
     if (!vendor||!total||!date||!category) return res.status(400).json({error:'vendor,total,date,category required'});
     const id=uuidv4(); let filePath=null,driveUrl=null,driveFileId=null;
     if (req.file) {
@@ -160,7 +160,7 @@ router.post('/', authenticate, upload.single('file'), async (req, res) => {
       driveUrl=drive.url; driveFileId=drive.fileId;
     }
     const project=db.prepare('SELECT id FROM projects WHERE name=?').get(project_name);
-    db.prepare('INSERT INTO expenses(id,vendor,invoice_no,amount,gst,total,description,date,category,project_id,project_name,is_reimbursement,reimburse_to_id,reimburse_to_name,uploaded_by_id,uploaded_by_name,file_path,drive_url,drive_file_id)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,vendor,invoice_no||'',parseFloat(amount)||0,parseFloat(gst)||0,parseFloat(total)||0,description||'',date,category,project?.id||null,project_name||'',is_reimbursement==='true'||is_reimbursement===true?1:0,reimburse_to_id||null,reimburse_to_name||null,req.user.id,req.user.name,filePath,driveUrl,driveFileId);
+    db.prepare('INSERT INTO expenses(id,vendor,invoice_no,amount,gst,total,description,date,category,project_id,project_name,is_reimbursement,reimburse_to_id,reimburse_to_name,uploaded_by_id,uploaded_by_name,file_path,drive_url,drive_file_id,advance_paid)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,vendor,invoice_no||'',parseFloat(amount)||0,parseFloat(gst)||0,parseFloat(total)||0,description||'',date,category,project?.id||null,project_name||'',is_reimbursement==='true'||is_reimbursement===true?1:0,reimburse_to_id||null,reimburse_to_name||null,req.user.id,req.user.name,filePath,driveUrl,driveFileId,parseFloat(advance_paid)||0);
     res.status(201).json(db.prepare('SELECT * FROM expenses WHERE id=?').get(id));
   } catch(err){console.error(err);res.status(500).json({error:err.message});}
 });
@@ -188,7 +188,7 @@ router.delete('/:id',authenticate,adminOnly,(req,res)=>{
 router.get('/export/excel',authenticate,(req,res)=>{
   const XLSX=require('xlsx');
   const expenses=req.user.role==='admin'?db.prepare('SELECT * FROM expenses ORDER BY created_at DESC').all():db.prepare('SELECT * FROM expenses WHERE uploaded_by_id=? ORDER BY created_at DESC').all(req.user.id);
-  const rows=expenses.map(e=>({'Date':e.date,'Vendor':e.vendor,'Invoice No':e.invoice_no,'Description':e.description,'Category':e.category,'Project':e.project_name,'Amount':e.amount,'GST':e.gst,'Total':e.total,'Reimburse To':e.reimburse_to_name||'','Uploaded By':e.uploaded_by_name,'Status':e.status,'Drive Link':e.drive_url||''}));
+  const rows=expenses.map(e=>({'Date':e.date,'Vendor':e.vendor,'Invoice No':e.invoice_no,'Description':e.description,'Category':e.category,'Project':e.project_name,'Amount':e.amount,'GST':e.gst,'Total':e.total,'Advance Paid':e.advance_paid||0,'Balance Due':(e.total-(e.advance_paid||0)).toFixed(2),'Reimburse To':e.reimburse_to_name||'','Uploaded By':e.uploaded_by_name,'Status':e.status,'Drive Link':e.drive_url||''}));
   const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Expenses');
   const summary=[...new Set(expenses.map(e=>e.project_name))].map(p=>{const proj=expenses.filter(e=>e.project_name===p);return{Project:p,'Total Expenses':proj.reduce((s,e)=>s+e.total,0),'Bill Count':proj.length};});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),'Summary');
