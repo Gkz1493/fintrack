@@ -19,7 +19,7 @@ const BLANK = {
   vendor:'', invoice_no:'', amount:'', gst:'', total:'', description:'',
   date: new Date().toISOString().slice(0,10),
   category:'', suggestedCategory:'', source:'', project:'',
-  isReimbursement: false, reimburseTo:''
+  advance_paid: '', isReimbursement: false, reimburseTo:''
 };
 
 export default function Upload() {
@@ -246,6 +246,7 @@ export default function Upload() {
               ['Amount (excl. GST) *','amount',       'number'],
               ['GST Amount',          'gst',          'number'],
               ['Total Amount *',      'total',        'number'],
+              ['Advance Paid',        'advance_paid', 'number'],
               ['Description',         'description',  'text'],
             ].map(([label, field, type]) => (
               <div key={field}>
@@ -255,6 +256,23 @@ export default function Upload() {
               </div>
             ))}
           </div>
+          {/* Balance Due summary */}
+          {(parseFloat(form.advance_paid) > 0) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mt-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Total Bill</span>
+                <span className="font-semibold text-gray-800">₹{(parseFloat(form.total)||0).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm mt-1">
+                <span className="text-gray-500">Advance Paid</span>
+                <span className="font-semibold text-green-700">₹{(parseFloat(form.advance_paid)||0).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm mt-1 pt-1 border-t border-amber-200">
+                <span className="font-semibold text-gray-700">Balance Due</span>
+                <span className="font-bold text-red-600">₹{((parseFloat(form.total)||0)-(parseFloat(form.advance_paid)||0)).toFixed(2)}</span>
+              </div>
+            </div>
+          )}
           <button onClick={() => setStep(3)} disabled={!form.vendor || !form.total || !form.date}
             className="btn-primary w-full mt-5 flex items-center justify-center gap-2">
             Next: Select Project <ChevronRight size={15} />
@@ -383,7 +401,11 @@ export default function Upload() {
                 ['Project',   savedExpense.project_name],
                 ['Category',  savedExpense.category],
                 ['Date',      savedExpense.date],
-                ['Reimburse', savedExpense.reimburse_to_name || 'N/A'],
+                ['Advance Paid', savedExpense.advance_paid > 0 ? '₹'+Number(savedExpense.advance_paid).toLocaleString('en-IN') : 'Full Payment'],
+              ['Balance Due', savedExpense.advance_paid > 0 ? '₹'+((savedExpense.total||0)-(savedExpense.advance_paid||0)).toLocaleString('en-IN') : '—'],
+              ['Advance Paid', savedExpense.advance_paid > 0 ? '₹'+Number(savedExpense.advance_paid).toLocaleString('en-IN') : 'Full Payment'],
+              ['Balance Due', savedExpense.advance_paid > 0 ? '₹'+((savedExpense.total||0)-(savedExpense.advance_paid||0)).toLocaleString('en-IN') : '—'],
+              ['Reimburse', savedExpense.reimburse_to_name || 'N/A'],
               ].map(([k,v]) => (
                 <div key={k} className="bg-gray-50 rounded-lg p-2 border border-gray-100">
                   <div className="text-gray-400">{k}</div>
