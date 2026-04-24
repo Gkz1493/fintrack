@@ -58,7 +58,7 @@ async function extractImageWithClaude(imagePath) {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-3-5-haiku-20241022',
         max_tokens: 1024,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Image } },
@@ -101,7 +101,7 @@ async function extractPdfWithClaude(pdfPath) {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-3-5-haiku-20241022',
         max_tokens: 1024,
         messages: [{ role: 'user', content:
           EXTRACT_PROMPT + '\n\nHere is the raw text extracted from the PDF invoice:\n\n' + rawText,
