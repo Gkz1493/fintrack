@@ -108,6 +108,11 @@ try {
   `);
 } catch (e) { console.warn('project_details table:', e.message); }
 
+/* -- Migration: add advance_paid column to expenses -- */
+try {
+  db.exec(`ALTER TABLE expenses ADD COLUMN advance_paid REAL DEFAULT 0`);
+} catch (e) { console.warn('advance_paid migration:', e.message); }
+
 /* ââ Seed admin account âââââââââââââââââââââââââââââââââââââââââââ */
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();
 if (!adminExists) {
