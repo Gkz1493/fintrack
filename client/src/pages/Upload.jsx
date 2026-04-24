@@ -164,7 +164,7 @@ export default function Upload() {
             <p className="text-gray-400 text-sm mt-1">Capture any bill, receipt, or payment screenshot</p>
           </div>
           <input ref={camRef}  type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFile} />
           <div className="space-y-3">
             <button onClick={() => camRef.current?.click()}
               className="w-full bg-indigo-600 text-white rounded-xl p-4 flex items-center gap-4 hover:bg-indigo-700 transition active:scale-95">
