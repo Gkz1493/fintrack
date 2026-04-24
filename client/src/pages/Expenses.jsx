@@ -127,7 +127,7 @@ export default function Expenses() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Date','Vendor','Category','Project','Amount','Receipt',isAdmin&&'Actions'].filter(Boolean).map(h => (
+                  {['Date','Vendor','Category','Project','Amount','Adv. Paid','Balance','Receipt',isAdmin&&'Actions'].filter(Boolean).map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -149,6 +149,12 @@ export default function Expenses() {
                     <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">
                       {fmt(e.total)}
                       {e.gst > 0 && <div className="text-xs text-gray-400 font-normal">GST: {fmt(e.gst)}</div>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                      {e.advance_paid > 0 ? fmt(e.advance_paid) : '—'}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {e.advance_paid > 0 ? <span className="font-semibold text-red-600">{fmt((e.total||0)-(e.advance_paid||0))}</span> : '—'}
                     </td>
                     
                     
