@@ -7,7 +7,7 @@ const XLSX    = require('xlsx');
 const db      = require('../db');
 const { authenticate } = require('../middleware/auth');
 
-// ── Storage setup ──────────────────────────────────────────────────────────────
+// — Storage setup ————————————————————————————————————
 const UPLOAD_DIR = path.join(
   process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, '..', 'data'),
   'bankref'
@@ -16,7 +16,7 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename:    (_req, file,  cb) => {
+  filename:    (_req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, unique + path.extname(file.originalname));
   }
@@ -30,249 +30,264 @@ const upload = multer({
   }
 });
 
-// ── Helper: normalize date to YYYY-MM-DD ──────────────────────────────────────
+// ——— normalizeDate: convert any SBI date string to YYYY-MM-DD ———
 function normalizeDate(raw) {
   if (!raw) return '';
-  raw = String(raw).trim();
-  const m1 = raw.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
-  if (m1) return m1[3] + '-' + m1[2] + '-' + m1[1];
-  const months = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                   jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };
-  const m2 = raw.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
-  if (m2) return m2[3] + '-' + (months[m2[2].toLowerCase()] || '01') + '-' + m2[1].padStart(2,'0');
-  return raw;
+  const s = String(raw).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  let m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+  if (m) {
+    const mn = MON[m[2].toLowerCase()];
+    if (mn) return `${m[3]}-${String(mn).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  }
+  m = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+  return '';
 }
 
-// ── Helper: parse SBI Excel / CSV ─────────────────────────────────────────────
-function parseSBIStatement(buffer, originalname) {
-  const wb   = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  const ws   = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+// ——— parseAmt: "1,40,000.00" → 140000 ———————————————————
+function parseAmt(s) {
+  if (!s && s !== 0) return 0;
+  const n = parseFloat(String(s).replace(/,/g,''));
+  return isNaN(n) ? 0 : n;
+}
 
+// ——— isPureAmt: is this string a standalone amount? ——————
+function isPureAmt(s) {
+  return /^\d{1,3}(?:,\d{2,3})*\.\d{2}$/.test(s.trim());
+}
+
+// ——— extractAmts: pull all amounts from a string ————————
+function extractAmts(s) {
+  return (s.match(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g) || []).map(parseAmt);
+}
+
+// ——— Date detection helpers ——————————————————————————
+const DATE_PAT = /^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})/;
+function startsWithDate(s) { return DATE_PAT.test(s); }
+function extractLeadingDate(s) { const m = s.match(DATE_PAT); return m ? m[1] : null; }
+function stripLeadingDate(s) {
+  return s.replace(/^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})\s*/,'');
+}
+
+// ——— cleanVendor: strip UTR/prefixes from narration ————
+function cleanVendor(narration) {
+  if (!narration) return '';
+  let v = narration
+    .replace(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/g,' ')
+    .replace(/\b(NEFT|IMPS|RTGS|UPI|INB|BY|TO|VIA)\b/gi,' ')
+    .replace(/[\|\/\\]/g,' ')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+  if (v.length > 60) v = v.substring(0,60).trim();
+  return v || narration.substring(0,50);
+}
+
+// ——————————————————————————————————————————————————————
+// Excel / CSV Parser
+// ——————————————————————————————————————————————————————
+function parseSBIStatement(buffer, originalname) {
+  const ext = path.extname(originalname).toLowerCase();
+  let rows;
+
+  if (ext === '.csv') {
+    const text = buffer.toString('utf8');
+    rows = text.split('\n').map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g,'')));
+  } else {
+    // cellDates:false avoids JS Date objects; raw:false formats numbers/dates as strings
+    const wb = XLSX.read(buffer, { type:'buffer', cellDates:false });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+  }
+
+  // Find header row
   let headerIdx = -1;
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const r = rows[i].map(c => String(c).toLowerCase().trim());
-    if (r.some(c => c.includes('date')) &&
-        r.some(c => c.includes('amount') || c.includes('debit') || c.includes('credit') ||
-                    c.includes('withdrawal') || c.includes('deposit'))) {
-      headerIdx = i; break;
+  const col = { date:-1, desc:-1, ref:-1, debit:-1, credit:-1, balance:-1 };
+
+  for (let i = 0; i < Math.min(rows.length, 25); i++) {
+    const row = rows[i].map(c => String(c).toLowerCase().trim());
+    if (row.some(c => c === 'txn date' || c === 'date' || c.includes('value date'))) {
+      headerIdx = i;
+      row.forEach((c, idx) => {
+        if ((c === 'txn date' || c === 'date') && col.date === -1) col.date = idx;
+        else if (c.includes('description') || c.includes('narration') || c === 'particulars') col.desc = idx;
+        else if (c.includes('ref no') || c.includes('chq') || c.includes('reference')) col.ref = idx;
+        else if (c === 'debit' || c.includes('withdrawal')) col.debit = idx;
+        else if (c === 'credit' || c.includes('deposit')) col.credit = idx;
+        else if (c.includes('balance')) col.balance = idx;
+      });
+      // Also pick up 'value date' if no txn date found
+      if (col.date === -1) {
+        row.forEach((c,idx) => { if (c.includes('value date') && col.date===-1) col.date=idx; });
+      }
+      break;
     }
   }
-  if (headerIdx === -1) headerIdx = 0;
 
-  const headers  = rows[headerIdx].map(c => String(c).toLowerCase().trim());
-  const col      = (kws) => { for (const k of kws) { const i = headers.findIndex(h => h.includes(k)); if (i !== -1) return i; } return -1; };
-  const dateCol  = col(['date']);
-  const descCol  = col(['description','narration','particulars','remarks','detail']);
-  const debitCol = col(['debit','withdrawal','dr']);
-  const creditCol= col(['credit','deposit','cr']);
-  const amtCol   = col(['amount']);
-  const utrCol   = col(['utr','ref no','reference','chq','cheque']);
+  if (headerIdx === -1) return [];
 
   const entries = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row     = rows[i];
-    const rawDate = row[dateCol] || '';
-    if (!rawDate) continue;
-    let dateStr = rawDate instanceof Date
-      ? rawDate.toISOString().split('T')[0]
-      : normalizeDate(String(rawDate));
-    if (!dateStr) continue;
+  let prevBalance = null;
 
-    let amount = 0, type = '';
-    if (debitCol !== -1 && creditCol !== -1) {
-      const deb = parseFloat(String(row[debitCol]).replace(/,/g,'')) || 0;
-      const cre = parseFloat(String(row[creditCol]).replace(/,/g,'')) || 0;
-      if (deb > 0)      { amount = deb; type = 'debit';  }
-      else if (cre > 0) { amount = cre; type = 'credit'; }
-    } else if (amtCol !== -1) {
-      amount = parseFloat(String(row[amtCol]).replace(/,/g,'')) || 0;
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.every(c => !String(c).trim())) continue;
+
+    const dateRaw = col.date >= 0 ? String(row[col.date] || '').trim() : '';
+    if (!dateRaw || /opening|closing|balance/i.test(dateRaw)) continue;
+
+    // Handle Excel serial number dates (5-digit numbers like "46100")
+    let dateStr = dateRaw;
+    if (/^\d{5}$/.test(dateStr)) {
+      try {
+        const d = XLSX.SSF.parse_date_code(parseInt(dateStr));
+        const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        if (d) dateStr = `${d.d} ${months[d.m-1]} ${d.y}`;
+      } catch(e) {}
     }
 
-    entries.push({
-      date:            dateStr,
-      vendor:          descCol !== -1 ? String(row[descCol]).trim() : '',
-      amount,
-      type,
-      invoice_no:      '',
-      utr_number:      utrCol !== -1 ? String(row[utrCol]).trim() : '',
-      remark:          '',
-      reference_files: '[]',
-    });
+    const date = normalizeDate(dateStr);
+    if (!date) continue;
+
+    const desc    = col.desc   >= 0 ? String(row[col.desc]   || '').trim() : '';
+    const refRaw  = col.ref    >= 0 ? String(row[col.ref]    || '').trim() : '';
+    const debit   = col.debit  >= 0 ? parseAmt(row[col.debit])  : 0;
+    const credit  = col.credit >= 0 ? parseAmt(row[col.credit]) : 0;
+    const balance = col.balance>= 0 ? parseAmt(row[col.balance]): 0;
+
+    let txnAmt = debit || credit;
+    if (!txnAmt && prevBalance !== null && balance > 0) {
+      txnAmt = Math.abs(prevBalance - balance);
+    }
+    if (balance > 0) prevBalance = balance;
+    if (!txnAmt) continue;
+
+    const combined = desc + ' ' + refRaw;
+    const utrM = combined.match(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/);
+    const utr = utrM ? utrM[1] : (refRaw || '');
+    const vendor = cleanVendor(desc);
+    entries.push({ date, vendor, amount:txnAmt, utr });
   }
   return entries;
 }
 
-// ── Helper: parse SBI PDF statement ───────────────────────────────────────────
+// ——————————————————————————————————————————————————————
+// PDF Parser
+// ——————————————————————————————————————————————————————
 async function parseSBIPDF(filePath) {
-  const pdfParse   = require('pdf-parse');
-  const dataBuffer = fs.readFileSync(filePath);
-  const data       = await pdfParse(dataBuffer);
-  const rawLines   = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+  const pdfParse = require('pdf-parse');
+  const buf = fs.readFileSync(filePath);
+  const data = await pdfParse(buf);
+  const lines = data.text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-  // Date at start of a string (anchored with ^)
-  const DATE_START = /^(\d{2}[\/-]\d{2}[\/-]\d{4}|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/;
-  // Pure amount line (whole line is just an Indian-format number)
-  const PURE_AMT   = /^\d{1,3}(?:,\d{2,3})*\.\d{2}$/;
-  // Amount anywhere in text
-  const AMT_IN     = /\b\d{1,3}(?:,\d{2,3})*\.\d{2}\b/g;
-  // SBI UTR / reference codes
-  const UTR_RE     = /\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{8,})\b/;
+  const UTR_RE = /\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/g;
 
-  function toISO(s) {
-    s = String(s).trim();
-    const m1 = s.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
-    if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-    const mo = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
-    const m2 = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
-    if (m2) { const m = mo[m2[2].toLowerCase()]; return m ? `${m2[3]}-${m}-${m2[1].padStart(2,'0')}` : s; }
-    return s;
-  }
-
-  function getAmts(text) {
-    const re = new RegExp(AMT_IN.source, 'g');
-    const out = []; let m;
-    while ((m = re.exec(text)) !== null) out.push(parseFloat(m[0].replace(/,/g,'')));
-    return out;
-  }
-
-  // Find header row and opening balance
-  let startIdx = 0, prevBalance = null;
-  for (let i = 0; i < rawLines.length; i++) {
-    const l = rawLines[i].toLowerCase();
-    if (l.includes('opening balance')) {
-      const amts = getAmts(rawLines[i]);
-      if (amts.length > 0) prevBalance = amts[amts.length - 1];
-      startIdx = i + 1;
+  // Find opening balance
+  let prevBalance = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (/opening\s+balance/i.test(lines[i])) {
+      const inlineAmts = extractAmts(lines[i]);
+      if (inlineAmts.length > 0) { prevBalance = inlineAmts[inlineAmts.length-1]; break; }
+      for (let j = i+1; j < Math.min(i+5, lines.length); j++) {
+        if (isPureAmt(lines[j])) { prevBalance = parseAmt(lines[j]); break; }
+      }
       break;
     }
-    if (/txn\s*date/i.test(rawLines[i]) &&
-        (l.includes('debit') || l.includes('credit') || l.includes('balance') || l.includes('withdrawal'))) {
-      startIdx = i + 1;
-    }
+  }
+
+  // Find all transaction start indices
+  const txnStarts = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (startsWithDate(lines[i])) txnStarts.push(i);
   }
 
   const entries = [];
-  let i = startIdx;
 
-  while (i < rawLines.length) {
-    const line = rawLines[i];
+  for (let t = 0; t < txnStarts.length; t++) {
+    const si = txnStarts[t];
+    const ei = t+1 < txnStarts.length ? txnStarts[t+1] : lines.length;
+    const block = lines.slice(si, Math.min(ei, si+15));
 
-    if (/closing balance|total debit|total credit|generated on|statement of account|page \d/i.test(line)) {
-      i++; continue;
-    }
+    // Extract txn date from first line
+    const txnDateStr = extractLeadingDate(block[0]);
+    if (!txnDateStr) continue;
+    const txnDate = normalizeDate(txnDateStr);
+    if (!txnDate) continue;
 
-    const dm = line.match(DATE_START);
-    if (!dm) { i++; continue; }
+    // Strip txn date, then strip value date if concatenated
+    let rest = stripLeadingDate(block[0]);
+    if (startsWithDate(rest)) rest = stripLeadingDate(rest);
 
-    const rawDate = dm[1];
-    const isoDate = toISO(rawDate);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) { i++; continue; }
-
-    // ── Strip txn date from start of line ───────────────────────────────────
-    let rest = line.slice(dm[0].length);
-
-    // ── Strip value date: handle BOTH same-line (concatenated) AND separate-line
-    // Same-line case: "1 Apr 20261 Apr 2026 - narration..." or "01/04/202601/04/2026..."
-    // After removing txn date, rest might start with another date (possibly concatenated)
-    const vdSameLine = rest.match(DATE_START);
-    if (vdSameLine && toISO(vdSameLine[1]) === isoDate) {
-      rest = rest.slice(vdSameLine[0].length);
-    }
-    rest = rest.trim();
-
-    // ── Collect narration parts and amounts from first line ─────────────────
     const narParts = [];
-    const amounts  = [];
+    const amounts = [];
+
+    // Handle rest of first line
     if (rest) {
-      const lineAmts = getAmts(rest);
-      lineAmts.forEach(a => amounts.push(a));
-      const txt = rest.replace(new RegExp(AMT_IN.source, 'g'), '').replace(/\s+/g,' ').trim();
-      if (txt) narParts.push(txt);
+      if (isPureAmt(rest)) {
+        amounts.push(parseAmt(rest));
+      } else {
+        const inAmts = extractAmts(rest);
+        const stripped = rest.replace(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g,'').trim();
+        if (inAmts.length > 0 && stripped === '') {
+          amounts.push(...inAmts);
+        } else {
+          narParts.push(rest);
+        }
+      }
     }
 
-    // ── Collect subsequent lines ─────────────────────────────────────────────
-    // Key insight: stop at ANY date line once we have seen some content
-    // (value date on separate line is only possible BEFORE any amounts/narration)
-    let j = i + 1;
+    // Process lines 1+ in block
     let seenContent = narParts.length > 0 || amounts.length > 0;
+    for (let li = 1; li < block.length; li++) {
+      const line = block[li];
 
-    while (j < rawLines.length && j <= i + 8) {
-      const next = rawLines[j];
-
-      if (/closing balance|generated on|statement of account/i.test(next)) break;
-
-      const nextDM = next.match(DATE_START);
-      if (nextDM) {
-        const nextISO = toISO(nextDM[1]);
-        if (!seenContent && nextISO === isoDate) {
-          // Value date on separate line (no content seen yet) → skip it
-          j++; continue;
-        }
-        // Any date after we've seen content = new transaction
+      if (startsWithDate(line)) {
+        if (!seenContent) { seenContent = true; continue; } // skip value date
         break;
       }
+      if (/this is a computer|generated statement|page \d|statement of/i.test(line)) break;
 
-      if (PURE_AMT.test(next)) {
-        amounts.push(parseFloat(next.replace(/,/g,'')));
+      if (isPureAmt(line)) {
+        amounts.push(parseAmt(line));
         seenContent = true;
-      } else {
-        const lineAmts = getAmts(next);
-        lineAmts.forEach(a => amounts.push(a));
-        const txt = next.replace(new RegExp(AMT_IN.source, 'g'), '').replace(/\s+/g,' ').trim();
-        if (txt) { narParts.push(txt); seenContent = true; }
+      } else if (line) {
+        const lineAmts = extractAmts(line);
+        const lineStripped = line.replace(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g,'').trim();
+        if (lineAmts.length > 0 && lineStripped === '') {
+          amounts.push(...lineAmts);
+        } else {
+          narParts.push(line);
+        }
+        seenContent = true;
       }
-      j++;
     }
-    i = j;
 
     if (amounts.length === 0) continue;
 
-    const balance = amounts[amounts.length - 1];
-
-    // ── Compute transaction amount via balance movement ──────────────────────
-    let txnAmt = 0, type = '';
+    const balance = amounts[amounts.length-1];
+    let txnAmt = 0;
     if (prevBalance !== null) {
-      const diff = Math.round((prevBalance - balance) * 100) / 100;
-      if      (diff >  0.01) { txnAmt =  diff; type = 'debit';  }
-      else if (diff < -0.01) { txnAmt = -diff; type = 'credit'; }
-    }
-    // Fallback: largest non-zero, non-balance amount
-    if (txnAmt === 0 && amounts.length >= 2) {
-      const cands = amounts.slice(0,-1).filter(a => a > 0.01);
-      if (cands.length > 0) txnAmt = Math.max(...cands);
+      txnAmt = Math.abs(prevBalance - balance);
+    } else {
+      for (let a = 0; a < amounts.length-1; a++) {
+        if (amounts[a] > 0) { txnAmt = amounts[a]; break; }
+      }
     }
     prevBalance = balance;
 
-    // ── Build narration and extract vendor/UTR ───────────────────────────────
-    const narration = narParts.join(' ').replace(/\s+/g,' ').trim();
-    const utrMatch  = narration.match(UTR_RE);
-    const utr_number = utrMatch ? utrMatch[1] : '';
+    const narration = narParts.join(' ').replace(/\s{2,}/g,' ').trim();
+    const utrMatches = [...narration.matchAll(UTR_RE)];
+    const utr = utrMatches.length > 0 ? utrMatches[0][1] : '';
+    const vendor = cleanVendor(narration);
 
-    let vendor = narration
-      .replace(utr_number, '')
-      .replace(/\b(INB|SBI|TO|BY|UPI|NEFT|IMPS|RTGS|TRANSFER|SALARY PAYMENT|INWARD|OUTWARD)\b/gi,' ')
-      .replace(/[-\/\\|]+/g,' ')
-      .replace(/\s+/g,' ').trim()
-      .substring(0, 80);
-
-    entries.push({
-      date:            isoDate,
-      vendor:          vendor || narration.substring(0, 80),
-      amount:          txnAmt,
-      type,
-      invoice_no:      '',
-      utr_number,
-      remark:          '',
-      reference_files: '[]'
-    });
+    entries.push({ date:txnDate, vendor, amount:txnAmt, utr });
   }
-
   return entries;
 }
-
-// ── Routes ────────────────────────────────────────────────────────────────────
 
 router.post('/parse', authenticate, upload.single('statement'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
