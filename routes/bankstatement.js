@@ -7,7 +7,6 @@ const XLSX    = require('xlsx');
 const db      = require('../db');
 const { authenticate } = require('../middleware/auth');
 
-// — Storage setup ————————————————————————————————————
 const UPLOAD_DIR = path.join(
   process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, '..', 'data'),
   'bankref'
@@ -30,51 +29,58 @@ const upload = multer({
   }
 });
 
-// ——— normalizeDate: convert any SBI date string to YYYY-MM-DD ———
+// ——— normalizeDate: handles all SBI date formats ———
+// Supports: "1 Apr 2026", "01-Apr-2026", "01/04/2026", "01-04-2026", "01-Apr-26"
 function normalizeDate(raw) {
   if (!raw) return '';
   const s = String(raw).trim();
   if (!s) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
   const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-  let m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+
+  // "1 Apr 2026", "01 Apr 2026", "01-Apr-2026", "01/Apr/2026"
+  let m = s.match(/^(\d{1,2})[-\s\/]([A-Za-z]{3})[-\s\/](\d{2,4})$/);
   if (m) {
     const mn = MON[m[2].toLowerCase()];
-    if (mn) return `${m[3]}-${String(mn).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+    let yr = parseInt(m[3]);
+    if (yr < 100) yr += 2000;
+    if (mn) return `${yr}-${String(mn).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
   }
-  m = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+
+  // "01/03/2026" or "01-03-2026" (DD/MM/YYYY)
+  m = s.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+
+  // Generic fallback
   const d = new Date(s);
   if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
   return '';
 }
 
-// ——— parseAmt: "1,40,000.00" → 140000 ———————————————————
 function parseAmt(s) {
   if (!s && s !== 0) return 0;
   const n = parseFloat(String(s).replace(/,/g,''));
   return isNaN(n) ? 0 : n;
 }
 
-// ——— isPureAmt: is this string a standalone amount? ——————
 function isPureAmt(s) {
   return /^\d{1,3}(?:,\d{2,3})*\.\d{2}$/.test(s.trim());
 }
 
-// ——— extractAmts: pull all amounts from a string ————————
 function extractAmts(s) {
   return (s.match(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g) || []).map(parseAmt);
 }
 
-// ——— Date detection helpers ——————————————————————————
-const DATE_PAT = /^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})/;
+// Date pattern: matches "1 Apr 2026", "01-Apr-2026", "01/04/2026", "01-04-2026"
+const DATE_PAT = /^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/-]\d{2}[\/-]\d{4})/i;
+
 function startsWithDate(s) { return DATE_PAT.test(s); }
 function extractLeadingDate(s) { const m = s.match(DATE_PAT); return m ? m[1] : null; }
 function stripLeadingDate(s) {
-  return s.replace(/^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})\s*/,'');
+  return s.replace(/^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/-]\d{2}[\/-]\d{4})\s*/i,'');
 }
 
-// ——— cleanVendor: strip UTR/prefixes from narration ————
 function cleanVendor(narration) {
   if (!narration) return '';
   let v = narration
@@ -87,9 +93,7 @@ function cleanVendor(narration) {
   return v || narration.substring(0,50);
 }
 
-// ——————————————————————————————————————————————————————
-// Excel / CSV Parser
-// ——————————————————————————————————————————————————————
+// ——— Excel/CSV Parser ———
 function parseSBIStatement(buffer, originalname) {
   const ext = path.extname(originalname).toLowerCase();
   let rows;
@@ -98,37 +102,44 @@ function parseSBIStatement(buffer, originalname) {
     const text = buffer.toString('utf8');
     rows = text.split('\n').map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g,'')));
   } else {
-    // cellDates:false avoids JS Date objects; raw:false formats numbers/dates as strings
     const wb = XLSX.read(buffer, { type:'buffer', cellDates:false });
     const ws = wb.Sheets[wb.SheetNames[0]];
     rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
   }
 
-  // Find header row
+  console.log('[SBI Excel] total rows:', rows.length);
+  if (rows.length > 0) console.log('[SBI Excel] row0:', JSON.stringify(rows[0]).substring(0,200));
+  if (rows.length > 1) console.log('[SBI Excel] row1:', JSON.stringify(rows[1]).substring(0,200));
+  if (rows.length > 5) console.log('[SBI Excel] row5:', JSON.stringify(rows[5]).substring(0,200));
+
   let headerIdx = -1;
   const col = { date:-1, desc:-1, ref:-1, debit:-1, credit:-1, balance:-1 };
 
-  for (let i = 0; i < Math.min(rows.length, 25); i++) {
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const row = rows[i].map(c => String(c).toLowerCase().trim());
-    if (row.some(c => c === 'txn date' || c === 'date' || c.includes('value date'))) {
+    console.log('[SBI Excel] scanning row', i, ':', row.slice(0,8).join(' | '));
+    if (row.some(c => c === 'txn date' || c === 'date' || c.includes('value date') || c.includes('tran date'))) {
       headerIdx = i;
       row.forEach((c, idx) => {
-        if ((c === 'txn date' || c === 'date') && col.date === -1) col.date = idx;
+        if ((c === 'txn date' || c === 'date' || c.includes('tran date')) && col.date === -1) col.date = idx;
         else if (c.includes('description') || c.includes('narration') || c === 'particulars') col.desc = idx;
         else if (c.includes('ref no') || c.includes('chq') || c.includes('reference')) col.ref = idx;
-        else if (c === 'debit' || c.includes('withdrawal')) col.debit = idx;
-        else if (c === 'credit' || c.includes('deposit')) col.credit = idx;
+        else if (c === 'debit' || c.includes('withdrawal') || c.includes('dr')) col.debit = idx;
+        else if (c === 'credit' || c.includes('deposit') || c.includes('cr')) col.credit = idx;
         else if (c.includes('balance')) col.balance = idx;
       });
-      // Also pick up 'value date' if no txn date found
       if (col.date === -1) {
         row.forEach((c,idx) => { if (c.includes('value date') && col.date===-1) col.date=idx; });
       }
+      console.log('[SBI Excel] header at row', i, 'col map:', JSON.stringify(col));
       break;
     }
   }
 
-  if (headerIdx === -1) return [];
+  if (headerIdx === -1) {
+    console.log('[SBI Excel] no header row found, returning 0 entries');
+    return [];
+  }
 
   const entries = [];
   let prevBalance = null;
@@ -140,7 +151,6 @@ function parseSBIStatement(buffer, originalname) {
     const dateRaw = col.date >= 0 ? String(row[col.date] || '').trim() : '';
     if (!dateRaw || /opening|closing|balance/i.test(dateRaw)) continue;
 
-    // Handle Excel serial number dates (5-digit numbers like "46100")
     let dateStr = dateRaw;
     if (/^\d{5}$/.test(dateStr)) {
       try {
@@ -151,7 +161,7 @@ function parseSBIStatement(buffer, originalname) {
     }
 
     const date = normalizeDate(dateStr);
-    if (!date) continue;
+    if (!date) { console.log('[SBI Excel] could not parse date:', dateRaw); continue; }
 
     const desc    = col.desc   >= 0 ? String(row[col.desc]   || '').trim() : '';
     const refRaw  = col.ref    >= 0 ? String(row[col.ref]    || '').trim() : '';
@@ -172,21 +182,24 @@ function parseSBIStatement(buffer, originalname) {
     const vendor = cleanVendor(desc);
     entries.push({ date, vendor, amount:txnAmt, utr });
   }
+
+  console.log('[SBI Excel] parsed', entries.length, 'entries');
   return entries;
 }
 
-// ——————————————————————————————————————————————————————
-// PDF Parser
-// ——————————————————————————————————————————————————————
+// ——— PDF Parser ———
 async function parseSBIPDF(filePath) {
   const pdfParse = require('pdf-parse');
   const buf = fs.readFileSync(filePath);
   const data = await pdfParse(buf);
   const lines = data.text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
+  console.log('[SBI PDF] total lines:', lines.length);
+  // Log first 20 lines for debugging
+  lines.slice(0,20).forEach((l,i) => console.log(`[SBI PDF] line${i}: ${JSON.stringify(l)}`));
+
   const UTR_RE = /\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/g;
 
-  // Find opening balance
   let prevBalance = null;
   for (let i = 0; i < lines.length; i++) {
     if (/opening\s+balance/i.test(lines[i])) {
@@ -198,11 +211,15 @@ async function parseSBIPDF(filePath) {
       break;
     }
   }
+  console.log('[SBI PDF] opening balance:', prevBalance);
 
-  // Find all transaction start indices
   const txnStarts = [];
   for (let i = 0; i < lines.length; i++) {
     if (startsWithDate(lines[i])) txnStarts.push(i);
+  }
+  console.log('[SBI PDF] txn starts count:', txnStarts.length);
+  if (txnStarts.length > 0) {
+    txnStarts.slice(0,5).forEach(idx => console.log(`[SBI PDF] txnStart[${idx}]: ${JSON.stringify(lines[idx])}`));
   }
 
   const entries = [];
@@ -212,20 +229,17 @@ async function parseSBIPDF(filePath) {
     const ei = t+1 < txnStarts.length ? txnStarts[t+1] : lines.length;
     const block = lines.slice(si, Math.min(ei, si+15));
 
-    // Extract txn date from first line
     const txnDateStr = extractLeadingDate(block[0]);
     if (!txnDateStr) continue;
     const txnDate = normalizeDate(txnDateStr);
     if (!txnDate) continue;
 
-    // Strip txn date, then strip value date if concatenated
     let rest = stripLeadingDate(block[0]);
     if (startsWithDate(rest)) rest = stripLeadingDate(rest);
 
     const narParts = [];
     const amounts = [];
 
-    // Handle rest of first line
     if (rest) {
       if (isPureAmt(rest)) {
         amounts.push(parseAmt(rest));
@@ -240,17 +254,14 @@ async function parseSBIPDF(filePath) {
       }
     }
 
-    // Process lines 1+ in block
     let seenContent = narParts.length > 0 || amounts.length > 0;
     for (let li = 1; li < block.length; li++) {
       const line = block[li];
-
       if (startsWithDate(line)) {
-        if (!seenContent) { seenContent = true; continue; } // skip value date
+        if (!seenContent) { seenContent = true; continue; }
         break;
       }
-      if (/this is a computer|generated statement|page \d|statement of/i.test(line)) break;
-
+      if (/this is a computer|generated statement|page \d|statement of account/i.test(line)) break;
       if (isPureAmt(line)) {
         amounts.push(parseAmt(line));
         seenContent = true;
@@ -286,6 +297,8 @@ async function parseSBIPDF(filePath) {
 
     entries.push({ date:txnDate, vendor, amount:txnAmt, utr });
   }
+
+  console.log('[SBI PDF] parsed', entries.length, 'entries');
   return entries;
 }
 
