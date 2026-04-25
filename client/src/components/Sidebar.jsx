@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Home, Camera, FileText, Users, LogOut, ChevronDown, Settings, FolderOpen } from 'lucide-react';
+import { Home, Camera, FileText, Users, LogOut, ChevronDown, Settings, FolderOpen Landmark, } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useState } from 'react';
 
@@ -9,6 +9,7 @@ const links = [
   { to: '/expenses',       label: 'All Expenses',    icon: FileText },
   { to: '/reimbursements', label: 'Reimbursements',  icon: Users },
   { to: '/projects',       label: 'Projects',        icon: FolderOpen },
+  { to: '/bank-statement', label: 'Bank Statement',  icon: Landmark },
 ];
 
 export default function Sidebar() {
