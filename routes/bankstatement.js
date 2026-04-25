@@ -105,53 +105,49 @@ function parseSBIStatement(buffer, originalname) {
 
 // ── Helper: parse SBI PDF statement ───────────────────────────────────────────
 async function parseSBIPDF(filePath) {
-  const pdfParse  = require('pdf-parse');
+  const pdfParse   = require('pdf-parse');
   const dataBuffer = fs.readFileSync(filePath);
   const data       = await pdfParse(dataBuffer);
   const rawLines   = data.text.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Indian-format amount  e.g. 1,40,000.00
-  const AMOUNT_RE   = /\b\d{1,3}(?:,\d{2,3})*\.\d{2}\b/g;
-  // Date at start of a line
-  const DATE_RE     = /^(\d{2}[\/\-]\d{2}[\/\-]\d{4}|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/;
-  // Date anywhere (for stripping from narration)
-  const DATE_ANY_RE = /\b\d{2}[\/\-]\d{2}[\/\-]\d{4}\b|\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/g;
-  // SBI UTR / reference  e.g. SBIN126062267679, UTIB0001234567890
-  const UTR_RE      = /\b([A-Z]{3,5}\d{9,})\b/;
+  // Date at start of a string (anchored with ^)
+  const DATE_START = /^(\d{2}[\/-]\d{2}[\/-]\d{4}|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/;
+  // Pure amount line (whole line is just an Indian-format number)
+  const PURE_AMT   = /^\d{1,3}(?:,\d{2,3})*\.\d{2}$/;
+  // Amount anywhere in text
+  const AMT_IN     = /\b\d{1,3}(?:,\d{2,3})*\.\d{2}\b/g;
+  // SBI UTR / reference codes
+  const UTR_RE     = /\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{8,})\b/;
 
-  function extractAmounts(text) {
-    const re = new RegExp(AMOUNT_RE.source, 'g');
+  function toISO(s) {
+    s = String(s).trim();
+    const m1 = s.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+    if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
+    const mo = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+                jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const m2 = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+    if (m2) { const m = mo[m2[2].toLowerCase()]; return m ? `${m2[3]}-${m}-${m2[1].padStart(2,'0')}` : s; }
+    return s;
+  }
+
+  function getAmts(text) {
+    const re = new RegExp(AMT_IN.source, 'g');
     const out = []; let m;
-    while ((m = re.exec(text)) !== null) out.push(parseFloat(m[0].replace(/,/g, '')));
+    while ((m = re.exec(text)) !== null) out.push(parseFloat(m[0].replace(/,/g,'')));
     return out;
   }
 
-  function toISO(str) {
-    str = String(str).trim();
-    const m1 = str.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
-    if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-    const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                    jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
-    const m2 = str.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
-    if (m2) { const mo = months[m2[2].toLowerCase()]; return mo ? `${m2[3]}-${mo}-${m2[1].padStart(2,'0')}` : str; }
-    return str;
-  }
-
-  // ── Find header row & opening balance ────────────────────────────────────
-  let startIdx   = 0;
-  let prevBalance = null;
-
+  // Find header row and opening balance
+  let startIdx = 0, prevBalance = null;
   for (let i = 0; i < rawLines.length; i++) {
     const l = rawLines[i].toLowerCase();
-    // Grab opening balance so first transaction type is computed correctly
     if (l.includes('opening balance')) {
-      const amts = extractAmounts(rawLines[i]);
+      const amts = getAmts(rawLines[i]);
       if (amts.length > 0) prevBalance = amts[amts.length - 1];
       startIdx = i + 1;
       break;
     }
-    // Detect column header row
-    if (/txn\s*date|transaction\s*date/i.test(rawLines[i]) &&
+    if (/txn\s*date/i.test(rawLines[i]) &&
         (l.includes('debit') || l.includes('credit') || l.includes('balance') || l.includes('withdrawal'))) {
       startIdx = i + 1;
     }
@@ -163,46 +159,79 @@ async function parseSBIPDF(filePath) {
   while (i < rawLines.length) {
     const line = rawLines[i];
 
-    // Skip footer / header repeats
-    if (/closing balance|total debit|total credit|generated on|statement of account|page \d|txn date|value date/i.test(line)) {
+    if (/closing balance|total debit|total credit|generated on|statement of account|page \d/i.test(line)) {
       i++; continue;
     }
 
-    const dateMatch = line.match(DATE_RE);
-    if (!dateMatch) { i++; continue; }
+    const dm = line.match(DATE_START);
+    if (!dm) { i++; continue; }
 
-    const rawDate = dateMatch[1];
+    const rawDate = dm[1];
     const isoDate = toISO(rawDate);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) { i++; continue; }
 
-    // ── Collect lines for this transaction ───────────────────────────────
-    // SBI PDFs often have: TxnDate | ValueDate | Narration | Ref | Debit | Credit | Balance
-    // each on its own line — we collect up to 8 lines then stop at next new date
-    const group = [line];
+    // ── Strip txn date from start of line ───────────────────────────────────
+    let rest = line.slice(dm[0].length);
+
+    // ── Strip value date: handle BOTH same-line (concatenated) AND separate-line
+    // Same-line case: "1 Apr 20261 Apr 2026 - narration..." or "01/04/202601/04/2026..."
+    // After removing txn date, rest might start with another date (possibly concatenated)
+    const vdSameLine = rest.match(DATE_START);
+    if (vdSameLine && toISO(vdSameLine[1]) === isoDate) {
+      rest = rest.slice(vdSameLine[0].length);
+    }
+    rest = rest.trim();
+
+    // ── Collect narration parts and amounts from first line ─────────────────
+    const narParts = [];
+    const amounts  = [];
+    if (rest) {
+      const lineAmts = getAmts(rest);
+      lineAmts.forEach(a => amounts.push(a));
+      const txt = rest.replace(new RegExp(AMT_IN.source, 'g'), '').replace(/\s+/g,' ').trim();
+      if (txt) narParts.push(txt);
+    }
+
+    // ── Collect subsequent lines ─────────────────────────────────────────────
+    // Key insight: stop at ANY date line once we have seen some content
+    // (value date on separate line is only possible BEFORE any amounts/narration)
     let j = i + 1;
+    let seenContent = narParts.length > 0 || amounts.length > 0;
+
     while (j < rawLines.length && j <= i + 8) {
       const next = rawLines[j];
+
       if (/closing balance|generated on|statement of account/i.test(next)) break;
-      const nextDateMatch = next.match(DATE_RE);
-      if (nextDateMatch) {
-        const nextISO = toISO(nextDateMatch[1]);
-        // Same date = value date column → skip it and keep collecting
-        if (nextISO === isoDate) { j++; continue; }
-        // Different date = new transaction → stop
+
+      const nextDM = next.match(DATE_START);
+      if (nextDM) {
+        const nextISO = toISO(nextDM[1]);
+        if (!seenContent && nextISO === isoDate) {
+          // Value date on separate line (no content seen yet) → skip it
+          j++; continue;
+        }
+        // Any date after we've seen content = new transaction
         break;
       }
-      group.push(next);
+
+      if (PURE_AMT.test(next)) {
+        amounts.push(parseFloat(next.replace(/,/g,'')));
+        seenContent = true;
+      } else {
+        const lineAmts = getAmts(next);
+        lineAmts.forEach(a => amounts.push(a));
+        const txt = next.replace(new RegExp(AMT_IN.source, 'g'), '').replace(/\s+/g,' ').trim();
+        if (txt) { narParts.push(txt); seenContent = true; }
+      }
       j++;
     }
     i = j;
 
-    const combined = group.join(' ');
-    const amts     = extractAmounts(combined);
-    if (amts.length === 0) continue;
+    if (amounts.length === 0) continue;
 
-    const balance = amts[amts.length - 1];
+    const balance = amounts[amounts.length - 1];
 
-    // ── Transaction amount via balance movement (most reliable for SBI) ──
+    // ── Compute transaction amount via balance movement ──────────────────────
     let txnAmt = 0, type = '';
     if (prevBalance !== null) {
       const diff = Math.round((prevBalance - balance) * 100) / 100;
@@ -210,28 +239,22 @@ async function parseSBIPDF(filePath) {
       else if (diff < -0.01) { txnAmt = -diff; type = 'credit'; }
     }
     // Fallback: largest non-zero, non-balance amount
-    if (txnAmt === 0 && amts.length >= 2) {
-      const candidates = amts.slice(0, -1).filter(a => a > 0.01);
-      if (candidates.length > 0) txnAmt = Math.max(...candidates);
+    if (txnAmt === 0 && amounts.length >= 2) {
+      const cands = amounts.slice(0,-1).filter(a => a > 0.01);
+      if (cands.length > 0) txnAmt = Math.max(...cands);
     }
     prevBalance = balance;
 
-    // ── Extract UTR ───────────────────────────────────────────────────────
-    const utrMatch  = combined.match(UTR_RE);
+    // ── Build narration and extract vendor/UTR ───────────────────────────────
+    const narration = narParts.join(' ').replace(/\s+/g,' ').trim();
+    const utrMatch  = narration.match(UTR_RE);
     const utr_number = utrMatch ? utrMatch[1] : '';
 
-    // ── Build narration: strip all dates and amounts ───────────────────────
-    let narration = combined
-      .replace(DATE_ANY_RE, '')
-      .replace(new RegExp(AMOUNT_RE.source, 'g'), '')
-      .replace(/\s+/g, ' ').trim();
-
-    // ── Clean vendor name ─────────────────────────────────────────────────
     let vendor = narration
       .replace(utr_number, '')
-      .replace(/\b(TO TRANSFER|BY TRANSFER|TRANSFER|UPI|NEFT|IMPS|RTGS|SBI|TO |BY )\b/gi, ' ')
-      .replace(/[/\\|]+/g, ' ')
-      .replace(/\s+/g, ' ').trim()
+      .replace(/\b(INB|SBI|TO|BY|UPI|NEFT|IMPS|RTGS|TRANSFER|SALARY PAYMENT|INWARD|OUTWARD)\b/gi,' ')
+      .replace(/[-\/\\|]+/g,' ')
+      .replace(/\s+/g,' ').trim()
       .substring(0, 80);
 
     entries.push({
@@ -251,7 +274,6 @@ async function parseSBIPDF(filePath) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-// POST /api/bankstatement/parse
 router.post('/parse', authenticate, upload.single('statement'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const ext = path.extname(req.file.originalname).toLowerCase();
@@ -272,7 +294,6 @@ router.post('/parse', authenticate, upload.single('statement'), async (req, res)
   }
 });
 
-// POST /api/bankstatement/save
 router.post('/save', authenticate, express.json(), (req, res) => {
   const { entries = [], statementName = '' } = req.body;
   const insert = db.prepare(`
@@ -291,13 +312,11 @@ router.post('/save', authenticate, express.json(), (req, res) => {
   res.json({ saved: entries.length });
 });
 
-// GET /api/bankstatement/entries
 router.get('/entries', authenticate, (req, res) => {
   const rows = db.prepare('SELECT * FROM bank_statement_entries ORDER BY id DESC').all();
   res.json(rows.map(r => ({ ...r, reference_files: JSON.parse(r.reference_files || '[]') })));
 });
 
-// PATCH /api/bankstatement/entries/:id
 router.patch('/entries/:id', authenticate, express.json(), (req, res) => {
   const { date, vendor, amount, type, invoice_no, utr_number, remark } = req.body;
   db.prepare(`UPDATE bank_statement_entries
@@ -307,13 +326,11 @@ router.patch('/entries/:id', authenticate, express.json(), (req, res) => {
   res.json({ ok: true });
 });
 
-// DELETE /api/bankstatement/entries/:id
 router.delete('/entries/:id', authenticate, (req, res) => {
   db.prepare('DELETE FROM bank_statement_entries WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });
 
-// POST /api/bankstatement/reference/:id
 router.post('/reference/:id', authenticate, upload.array('files', 20), (req, res) => {
   const row = db.prepare('SELECT reference_files FROM bank_statement_entries WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Entry not found' });
@@ -325,14 +342,12 @@ router.post('/reference/:id', authenticate, upload.array('files', 20), (req, res
   res.json({ reference_files: combined });
 });
 
-// GET /api/bankstatement/reffile/:filename
 router.get('/reffile/:filename', authenticate, (req, res) => {
   const fp = path.join(UPLOAD_DIR, req.params.filename);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'File not found' });
   res.sendFile(fp);
 });
 
-// GET /api/bankstatement/export
 router.get('/export', authenticate, (req, res) => {
   const rows = db.prepare('SELECT * FROM bank_statement_entries ORDER BY id ASC').all();
   const data = rows.map(r => ({
