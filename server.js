@@ -26,6 +26,7 @@ app.use('/api/expenses',  require('./routes/expenses'));
 app.use('/api/projects',  require('./routes/projects'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/ocr',       require('./routes/ocr'));
+app.use('/api/bankstatement', require('./routes/bankstatement'));
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
