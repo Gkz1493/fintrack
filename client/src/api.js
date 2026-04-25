@@ -78,3 +78,54 @@ export const updateEmployee  = (id, d)  => api.put(`/employees/${id}`, d);
 export const deleteEmployee  = (id)     => api.delete(`/employees/${id}`);
 
 export default api;
+
+
+// ── Bank Statement API ───────────────────────────────────────────────────────
+const BS_URL = '/api/bankstatement';
+
+export async function parseStatement(formData) {
+  const res = await axios.post(`${BS_URL}/parse`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data;
+}
+
+export async function saveStatementEntries(entries, statementName) {
+  const res = await axios.post(`${BS_URL}/save`, { entries, statementName });
+  return res.data;
+}
+
+export async function getStatementEntries() {
+  const res = await axios.get(`${BS_URL}/entries`);
+  return res.data;
+}
+
+export async function updateStatementEntry(id, data) {
+  const res = await axios.patch(`${BS_URL}/entries/${id}`, data);
+  return res.data;
+}
+
+export async function deleteStatementEntry(id) {
+  const res = await axios.delete(`${BS_URL}/entries/${id}`);
+  return res.data;
+}
+
+export async function uploadReferenceFiles(id, files) {
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  const res = await axios.post(`${BS_URL}/reference/${id}`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data;
+}
+
+export function getRefFileUrl(filename) {
+  const base = axios.defaults.baseURL || '';
+  return `${base}${BS_URL}/reffile/${filename}`;
+}
+
+export function exportStatementUrl() {
+  const token = localStorage.getItem('ft_token') || '';
+  const base = axios.defaults.baseURL || '';
+  return `${base}${BS_URL}/export?token=${token}`;
+}
