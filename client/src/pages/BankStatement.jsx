@@ -167,7 +167,7 @@ export default function BankStatement() {
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Bank Statement</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Upload SBI statement (Excel/CSV) · Review &amp; edit · Save to database
+            Upload SBI statement (Excel/CSV/PDF) · Review &amp; edit · Save to database
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -175,7 +175,7 @@ export default function BankStatement() {
           <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
             <Upload size={16} />
             {parsing ? 'Parsing...' : 'Upload Statement'}
-            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileUpload} disabled={parsing} />
+            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden" onChange={handleFileUpload} disabled={parsing} />
           </label>
           {/* Add row */}
           <button onClick={addEmptyRow} className="inline-flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium transition-colors">
