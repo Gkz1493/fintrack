@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Home, Camera, FileText, Users, LogOut, ChevronDown, Settings, FolderOpen Landmark, } from 'lucide-react';
+import { Home, Camera, FileText, Users, LogOut, ChevronDown, Settings, FolderOpen, Landmark, } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useState } from 'react';
 
