@@ -369,4 +369,31 @@ router.get('/export', authenticate, (req, res) => {
   res.send(buf);
 });
 
+
+// ── DEBUG: returns raw extracted text so we can see the format ─────────────────
+router.post('/debug', authenticate, upload.single('statement'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  try {
+    if (ext === '.pdf') {
+      const pdfParse = require('pdf-parse');
+      const buf = fs.readFileSync(req.file.path);
+      const data = await pdfParse(buf);
+      const lines = data.text.split('\n').map((l,i) => i + ': ' + JSON.stringify(l));
+      fs.unlink(req.file.path, () => {});
+      res.json({ format: 'pdf', lines: lines.slice(0, 60) });
+    } else {
+      const buf = fs.readFileSync(req.file.path);
+      const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      fs.unlink(req.file.path, () => {});
+      res.json({ format: 'excel', rows: rows.slice(0, 15).map((r,i) => ({ row: i, data: r.map(c => String(c).substring(0,40)) })) });
+    }
+  } catch(e) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
