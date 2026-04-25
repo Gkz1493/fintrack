@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+          <Route path='/bank-statement' element={<ProtectedRoute><BankStatement /></ProtectedRoute>} />
 import { useAuth } from './context/AuthContext';
 import Sidebar        from './components/Sidebar';
 import Login          from './pages/Login';
@@ -6,6 +7,7 @@ import Dashboard      from './pages/Dashboard';
 import Upload         from './pages/Upload';
 import Expenses       from './pages/Expenses';
 import Reimbursements from './pages/Reimbursements';
+import BankStatement  from './pages/BankStatement';
 import Employees      from './pages/Employees';
 import Projects       from './pages/Projects';
 
