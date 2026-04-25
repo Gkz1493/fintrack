@@ -36,9 +36,7 @@ function normalizeDate(raw) {
   const s = String(raw).trim();
   if (!s) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
   const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-
   // "1 Apr 2026", "01 Apr 2026", "01-Apr-2026", "01/Apr/2026"
   let m = s.match(/^(\d{1,2})[-\s\/]([A-Za-z]{3})[-\s\/](\d{2,4})$/);
   if (m) {
@@ -47,11 +45,9 @@ function normalizeDate(raw) {
     if (yr < 100) yr += 2000;
     if (mn) return `${yr}-${String(mn).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
   }
-
   // "01/03/2026" or "01-03-2026" (DD/MM/YYYY)
-  m = s.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  m = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-
   // Generic fallback
   const d = new Date(s);
   if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
@@ -73,31 +69,61 @@ function extractAmts(s) {
 }
 
 // Date pattern: matches "1 Apr 2026", "01-Apr-2026", "01/04/2026", "01-04-2026"
-const DATE_PAT = /^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/-]\d{2}[\/-]\d{4})/i;
+const DATE_PAT = /^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})/i;
 
 function startsWithDate(s) { return DATE_PAT.test(s); }
 function extractLeadingDate(s) { const m = s.match(DATE_PAT); return m ? m[1] : null; }
 function stripLeadingDate(s) {
-  return s.replace(/^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/-]\d{2}[\/-]\d{4})\s*/i,'');
+  return s.replace(/^(\d{1,2}[-\s\/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s\/]\d{2,4}|\d{2}[\/\-]\d{2}[\/\-]\d{4})\s*/i,'');
 }
 
+// ——— extractUTR: pull UTR/ref number from narration string ———
+function extractUTR(narration) {
+  if (!narration) return '';
+  const s = String(narration);
+  // Prefer explicit "UTR NO: SBIN..." pattern
+  const utrNoM = s.match(/UTR\s*NO[:\s]+([A-Z]{2,6}\d{6,}[A-Z0-9]*)/i);
+  if (utrNoM) return utrNoM[1];
+  // Fallback: any SBIN/NEFT style alphanumeric ref
+  const fbM = s.match(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*)\b/);
+  if (fbM) return fbM[1];
+  return '';
+}
+
+// ——— cleanVendor: extract human-readable payee name ———
 function cleanVendor(narration) {
   if (!narration) return '';
-  let v = narration
-    .replace(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/g,' ')
-    .replace(/\b(NEFT|IMPS|RTGS|UPI|INB|BY|TO|VIA)\b/gi,' ')
-    .replace(/[\|\/\\]/g,' ')
-    .replace(/\s{2,}/g,' ')
-    .trim();
-  if (v.length > 60) v = v.substring(0,60).trim();
-  return v || narration.substring(0,50);
+  let s = String(narration).trim();
+
+  // Pattern: "...UTR NO: SBIN426061019567-Babu P"  → "Babu P"
+  // The vendor name follows the UTR number after a dash
+  const utrVendorM = s.match(/UTR\s*NO[:\s]+[A-Z0-9]+-\s*(.+?)\s*$/i);
+  if (utrVendorM && utrVendorM[1].trim()) {
+    return utrVendorM[1].trim().replace(/^[-\s]+|[-\s]+$/g, '');
+  }
+
+  // Pattern: "INB Salary Payment-" → "Salary Payment"
+  // Strip standard SBI prefix chain: TO TRANSFER-INB NEFT/IMPS/RTGS/UPI
+  s = s.replace(/^TO\s+TRANSFER[-\s]*/i, '');
+  s = s.replace(/^TRANSFER[-\s]*/i, '');
+  s = s.replace(/^INB[-\s]*/i, '');
+  s = s.replace(/^(NEFT|IMPS|RTGS|UPI)[-\s]*/i, '');
+  // Remove "UTR NO:" text and any UTR number tokens
+  s = s.replace(/\bUTR\s*NO[:\s]*/gi, '');
+  s = s.replace(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*)\b/g, '');
+  s = s.replace(/\b(BY|TO|VIA)\b/gi, '');
+  s = s.replace(/[|\/\\]/g, ' ');
+  s = s.replace(/\s{2,}/g, ' ').replace(/^[-\s]+|[-\s]+$/g, '').trim();
+
+  if (!s) return narration.substring(0, 50);
+  if (s.length > 60) s = s.substring(0, 60).trim();
+  return s;
 }
 
 // ——— Excel/CSV Parser ———
 function parseSBIStatement(buffer, originalname) {
   const ext = path.extname(originalname).toLowerCase();
   let rows;
-
   if (ext === '.csv') {
     const text = buffer.toString('utf8');
     rows = text.split('\n').map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g,'')));
@@ -106,7 +132,6 @@ function parseSBIStatement(buffer, originalname) {
     const ws = wb.Sheets[wb.SheetNames[0]];
     rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
   }
-
   console.log('[SBI Excel] total rows:', rows.length);
   if (rows.length > 0) console.log('[SBI Excel] row0:', JSON.stringify(rows[0]).substring(0,200));
   if (rows.length > 1) console.log('[SBI Excel] row1:', JSON.stringify(rows[1]).substring(0,200));
@@ -117,7 +142,6 @@ function parseSBIStatement(buffer, originalname) {
 
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const row = rows[i].map(c => String(c).toLowerCase().trim());
-    console.log('[SBI Excel] scanning row', i, ':', row.slice(0,8).join(' | '));
     if (row.some(c => c === 'txn date' || c === 'date' || c.includes('value date') || c.includes('tran date'))) {
       headerIdx = i;
       row.forEach((c, idx) => {
@@ -147,10 +171,8 @@ function parseSBIStatement(buffer, originalname) {
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row || row.every(c => !String(c).trim())) continue;
-
     const dateRaw = col.date >= 0 ? String(row[col.date] || '').trim() : '';
     if (!dateRaw || /opening|closing|balance/i.test(dateRaw)) continue;
-
     let dateStr = dateRaw;
     if (/^\d{5}$/.test(dateStr)) {
       try {
@@ -159,15 +181,14 @@ function parseSBIStatement(buffer, originalname) {
         if (d) dateStr = `${d.d} ${months[d.m-1]} ${d.y}`;
       } catch(e) {}
     }
-
     const date = normalizeDate(dateStr);
     if (!date) { console.log('[SBI Excel] could not parse date:', dateRaw); continue; }
 
-    const desc    = col.desc   >= 0 ? String(row[col.desc]   || '').trim() : '';
-    const refRaw  = col.ref    >= 0 ? String(row[col.ref]    || '').trim() : '';
-    const debit   = col.debit  >= 0 ? parseAmt(row[col.debit])  : 0;
-    const credit  = col.credit >= 0 ? parseAmt(row[col.credit]) : 0;
-    const balance = col.balance>= 0 ? parseAmt(row[col.balance]): 0;
+    const desc    = col.desc    >= 0 ? String(row[col.desc]    || '').trim() : '';
+    const refRaw  = col.ref     >= 0 ? String(row[col.ref]     || '').trim() : '';
+    const debit   = col.debit   >= 0 ? parseAmt(row[col.debit])   : 0;
+    const credit  = col.credit  >= 0 ? parseAmt(row[col.credit])  : 0;
+    const balance = col.balance >= 0 ? parseAmt(row[col.balance]) : 0;
 
     let txnAmt = debit || credit;
     if (!txnAmt && prevBalance !== null && balance > 0) {
@@ -176,13 +197,11 @@ function parseSBIStatement(buffer, originalname) {
     if (balance > 0) prevBalance = balance;
     if (!txnAmt) continue;
 
-    const combined = desc + ' ' + refRaw;
-    const utrM = combined.match(/\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/);
-    const utr = utrM ? utrM[1] : (refRaw || '');
-    const vendor = cleanVendor(desc);
-    entries.push({ date, vendor, amount:txnAmt, utr });
+    const combined   = desc + ' ' + refRaw;
+    const utr_number = extractUTR(combined) || refRaw || '';
+    const vendor     = cleanVendor(desc);
+    entries.push({ date, vendor, amount:txnAmt, utr_number });
   }
-
   console.log('[SBI Excel] parsed', entries.length, 'entries');
   return entries;
 }
@@ -190,12 +209,10 @@ function parseSBIStatement(buffer, originalname) {
 // ——— PDF Parser ———
 async function parseSBIPDF(filePath) {
   const pdfParse = require('pdf-parse');
-  const buf = fs.readFileSync(filePath);
+  const buf  = fs.readFileSync(filePath);
   const data = await pdfParse(buf);
   const lines = data.text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-
   console.log('[SBI PDF] total lines:', lines.length);
-  // Log first 20 lines for debugging
   lines.slice(0,20).forEach((l,i) => console.log(`[SBI PDF] line${i}: ${JSON.stringify(l)}`));
 
   const UTR_RE = /\b([A-Z]{2,6}\d{6,}[A-Z0-9]*|[A-Z][A-Z0-9]{9,})\b/g;
@@ -223,7 +240,6 @@ async function parseSBIPDF(filePath) {
   }
 
   const entries = [];
-
   for (let t = 0; t < txnStarts.length; t++) {
     const si = txnStarts[t];
     const ei = t+1 < txnStarts.length ? txnStarts[t+1] : lines.length;
@@ -238,13 +254,13 @@ async function parseSBIPDF(filePath) {
     if (startsWithDate(rest)) rest = stripLeadingDate(rest);
 
     const narParts = [];
-    const amounts = [];
+    const amounts  = [];
 
     if (rest) {
       if (isPureAmt(rest)) {
         amounts.push(parseAmt(rest));
       } else {
-        const inAmts = extractAmts(rest);
+        const inAmts   = extractAmts(rest);
         const stripped = rest.replace(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g,'').trim();
         if (inAmts.length > 0 && stripped === '') {
           amounts.push(...inAmts);
@@ -257,16 +273,12 @@ async function parseSBIPDF(filePath) {
     let seenContent = narParts.length > 0 || amounts.length > 0;
     for (let li = 1; li < block.length; li++) {
       const line = block[li];
-      if (startsWithDate(line)) {
-        if (!seenContent) { seenContent = true; continue; }
-        break;
-      }
+      if (startsWithDate(line)) { if (!seenContent) { seenContent = true; continue; } break; }
       if (/this is a computer|generated statement|page \d|statement of account/i.test(line)) break;
       if (isPureAmt(line)) {
-        amounts.push(parseAmt(line));
-        seenContent = true;
+        amounts.push(parseAmt(line)); seenContent = true;
       } else if (line) {
-        const lineAmts = extractAmts(line);
+        const lineAmts    = extractAmts(line);
         const lineStripped = line.replace(/\d{1,3}(?:,\d{2,3})*\.\d{2}/g,'').trim();
         if (lineAmts.length > 0 && lineStripped === '') {
           amounts.push(...lineAmts);
@@ -278,7 +290,6 @@ async function parseSBIPDF(filePath) {
     }
 
     if (amounts.length === 0) continue;
-
     const balance = amounts[amounts.length-1];
     let txnAmt = 0;
     if (prevBalance !== null) {
@@ -290,14 +301,12 @@ async function parseSBIPDF(filePath) {
     }
     prevBalance = balance;
 
-    const narration = narParts.join(' ').replace(/\s{2,}/g,' ').trim();
-    const utrMatches = [...narration.matchAll(UTR_RE)];
-    const utr = utrMatches.length > 0 ? utrMatches[0][1] : '';
-    const vendor = cleanVendor(narration);
-
-    entries.push({ date:txnDate, vendor, amount:txnAmt, utr });
+    const narration  = narParts.join(' ').replace(/\s{2,}/g,' ').trim();
+    const utr_number = extractUTR(narration);
+    const vendor     = cleanVendor(narration);
+    console.log(`[SBI PDF] txn ${txnDate}: vendor=${JSON.stringify(vendor)} utr=${utr_number} amt=${txnAmt}`);
+    entries.push({ date:txnDate, vendor, amount:txnAmt, utr_number });
   }
-
   console.log('[SBI PDF] parsed', entries.length, 'entries');
   return entries;
 }
@@ -331,9 +340,11 @@ router.post('/save', authenticate, express.json(), (req, res) => {
   `);
   const insertMany = db.transaction((rows) => {
     for (const e of rows) {
-      insert.run(e.date||'', e.vendor||'', parseFloat(e.amount)||0, e.type||'',
-                 e.invoice_no||'', e.utr_number||'', e.remark||'',
-                 JSON.stringify(e.reference_files||[]), statementName);
+      insert.run(
+        e.date||'', e.vendor||'', parseFloat(e.amount)||0,
+        e.type||'', e.invoice_no||'', e.utr_number||'',
+        e.remark||'', JSON.stringify(e.reference_files||[]), statementName
+      );
     }
   });
   insertMany(entries);
@@ -347,9 +358,7 @@ router.get('/entries', authenticate, (req, res) => {
 
 router.patch('/entries/:id', authenticate, express.json(), (req, res) => {
   const { date, vendor, amount, type, invoice_no, utr_number, remark } = req.body;
-  db.prepare(`UPDATE bank_statement_entries
-              SET date=?, vendor=?, amount=?, type=?, invoice_no=?, utr_number=?, remark=?
-              WHERE id=?`)
+  db.prepare(`UPDATE bank_statement_entries SET date=?, vendor=?, amount=?, type=?, invoice_no=?, utr_number=?, remark=? WHERE id=?`)
     .run(date, vendor, parseFloat(amount)||0, type, invoice_no, utr_number, remark, req.params.id);
   res.json({ ok: true });
 });
@@ -397,23 +406,21 @@ router.get('/export', authenticate, (req, res) => {
   res.send(buf);
 });
 
-
-// ── DEBUG: returns raw extracted text so we can see the format ─────────────────
 router.post('/debug', authenticate, upload.single('statement'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const ext = path.extname(req.file.originalname).toLowerCase();
   try {
     if (ext === '.pdf') {
       const pdfParse = require('pdf-parse');
-      const buf = fs.readFileSync(req.file.path);
+      const buf  = fs.readFileSync(req.file.path);
       const data = await pdfParse(buf);
       const lines = data.text.split('\n').map((l,i) => i + ': ' + JSON.stringify(l));
       fs.unlink(req.file.path, () => {});
       res.json({ format: 'pdf', lines: lines.slice(0, 60) });
     } else {
-      const buf = fs.readFileSync(req.file.path);
-      const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+      const buf  = fs.readFileSync(req.file.path);
+      const wb   = XLSX.read(buf, { type: 'buffer', cellDates: true });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
       fs.unlink(req.file.path, () => {});
       res.json({ format: 'excel', rows: rows.slice(0, 15).map((r,i) => ({ row: i, data: r.map(c => String(c).substring(0,40)) })) });
