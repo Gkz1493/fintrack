@@ -113,6 +113,23 @@ try {
   db.exec(`ALTER TABLE expenses ADD COLUMN advance_paid REAL DEFAULT 0`);
 } catch (e) { console.warn('advance_paid migration:', e.message); }
 
+/* -- Bank Statement Entries table -- */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bank_statement_entries (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    date             TEXT,
+    vendor           TEXT,
+    amount           REAL DEFAULT 0,
+    type             TEXT DEFAULT '',
+    invoice_no       TEXT DEFAULT '',
+    utr_number       TEXT DEFAULT '',
+    remark           TEXT DEFAULT '',
+    reference_files  TEXT DEFAULT '[]',
+    statement_name   TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now'))
+  )
+`);
+
 /* ââ Seed admin account âââââââââââââââââââââââââââââââââââââââââââ */
 const adminExists = db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();
 if (!adminExists) {
