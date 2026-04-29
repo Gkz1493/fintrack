@@ -402,10 +402,8 @@ export default function Upload() {
                 ['Category',  savedExpense.category],
                 ['Date',      savedExpense.date],
                 ['Advance Paid', savedExpense.advance_paid > 0 ? '₹'+Number(savedExpense.advance_paid).toLocaleString('en-IN') : 'Full Payment'],
-              ['Balance Due', savedExpense.advance_paid > 0 ? '₹'+((savedExpense.total||0)-(savedExpense.advance_paid||0)).toLocaleString('en-IN') : '—'],
-              ['Advance Paid', savedExpense.advance_paid > 0 ? '₹'+Number(savedExpense.advance_paid).toLocaleString('en-IN') : 'Full Payment'],
-              ['Balance Due', savedExpense.advance_paid > 0 ? '₹'+((savedExpense.total||0)-(savedExpense.advance_paid||0)).toLocaleString('en-IN') : '—'],
-              ['Reimburse', savedExpense.reimburse_to_name || 'N/A'],
+                ['Balance Due', savedExpense.advance_paid > 0 ? '₹'+((Number(savedExpense.total)||0)-(Number(savedExpense.advance_paid)||0)).toLocaleString('en-IN') : '—'],
+                ['Reimburse', savedExpense.reimburse_to_name || 'N/A'],
               ].map(([k,v]) => (
                 <div key={k} className="bg-gray-50 rounded-lg p-2 border border-gray-100">
                   <div className="text-gray-400">{k}</div>

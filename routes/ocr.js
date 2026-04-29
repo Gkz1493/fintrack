@@ -156,7 +156,15 @@ async function runTesseract(imagePath) {
 // ── Shared plain-text parser (regex, used when no API key) ───────────────────
 function parsePlainText(text, source) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const vendor = lines.find(l => l.length > 2) || null;
+
+  // Skip generic document-type header words to find the actual merchant name
+  const headerWords = /^(tax\s*invoice|gst\s*invoice|invoice|receipt|bill|cash\s*memo|retail\s*invoice|credit\s*note|debit\s*note|quotation|purchase\s*order|delivery\s*note|original|duplicate|triplicate|original\s*for\s*recipient|subject\s*to|www\.|http)/i;
+  const vendor = lines.find(l =>
+    l.length > 3 &&
+    !headerWords.test(l) &&
+    !/^\d+$/.test(l) &&         // not a bare number
+    !/^[\d\s\W]+$/.test(l)      // not only digits/symbols
+  ) || lines.find(l => l.length > 2) || null;
 
   let invoice_no = null;
   for (const line of lines) {
