@@ -1,151 +1,150 @@
-const Database = require('better-sqlite3');
-const path     = require('path');
-const fs       = require('fs');
-const bcrypt   = require('bcryptjs');
+const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
-/* ââ Persistent storage: Railway Volume â /data â app dir âââââââââ
-   In Railway: Add a Volume, set mount path to /data.
-   The env var RAILWAY_VOLUME_MOUNT_PATH is set automatically.      */
-const DB_DIR  = process.env.DB_DIR
-             || process.env.RAILWAY_VOLUME_MOUNT_PATH
-             || path.join(__dirname, 'data');
-const DB_PATH = path.join(DB_DIR, 'fintrack.db');
-fs.mkdirSync(DB_DIR, { recursive: true });
+// ─── Connection Pool ──────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+pool.on('error', (err) => {
+  console.error('PostgreSQL pool error:', err.message);
+});
 
-/* ââ Schema âââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    email      TEXT UNIQUE NOT NULL,
-    password   TEXT NOT NULL,
-    role       TEXT NOT NULL DEFAULT 'employee',
-    created_at TEXT DEFAULT (datetime('now'))
-  );
+// ─── Query helpers ────────────────────────────────────────────────────────────
+function toPostgres(sql) {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
 
-  CREATE TABLE IF NOT EXISTS projects (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,
-    description TEXT,
-    created_by  TEXT,
-    created_at  TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS employees (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    email      TEXT,
-    phone      TEXT,
-    department TEXT,
-    user_id    TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS expenses (
-    id                TEXT PRIMARY KEY,
-    vendor            TEXT NOT NULL,
-    invoice_no        TEXT,
-    amount            REAL NOT NULL DEFAULT 0,
-    gst               REAL DEFAULT 0,
-    total             REAL NOT NULL DEFAULT 0,
-    description       TEXT,
-    date              TEXT NOT NULL,
-    category          TEXT NOT NULL,
-    project_id        TEXT,
-    project_name      TEXT,
-    is_reimbursement  INTEGER DEFAULT 0,
-    reimburse_to_id   TEXT,
-    reimburse_to_name TEXT,
-    status            TEXT DEFAULT 'pending',
-    uploaded_by_id    TEXT,
-    uploaded_by_name  TEXT,
-    file_path         TEXT,
-    drive_url         TEXT,
-    drive_file_id     TEXT,
-    created_at        TEXT DEFAULT (datetime('now'))
-  );
-`);
-
-/* ââ Migration: make employees.email nullable (drop NOT NULL) âââââ */
-try {
-  const cols = db.prepare('PRAGMA table_info(employees)').all();
-  const emailCol = cols.find(c => c.name === 'email');
-  if (emailCol && emailCol.notnull === 1) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS employees_v2 (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, phone TEXT,
-        department TEXT, user_id TEXT, created_at TEXT DEFAULT (datetime('now'))
-      );
-      INSERT OR IGNORE INTO employees_v2 SELECT id,name,email,phone,department,user_id,created_at FROM employees;
-      DROP TABLE employees;
-      ALTER TABLE employees_v2 RENAME TO employees;
-    `);
-    console.log('â Migrated employees table (email now nullable)');
+const db = {
+  pool,
+  async get(sql, params = []) {
+    const r = await pool.query(toPostgres(sql), params);
+    return r.rows[0] || null;
+  },
+  async all(sql, params = []) {
+    const r = await pool.query(toPostgres(sql), params);
+    return r.rows;
+  },
+  async run(sql, params = []) {
+    return pool.query(toPostgres(sql), params);
+  },
+  async insert(sql, params = []) {
+    const pg = toPostgres(sql);
+    const withReturn = pg.trim().toUpperCase().includes('RETURNING') ? pg : pg + ' RETURNING *';
+    const r = await pool.query(withReturn, params);
+    return r.rows[0];
+  },
+  async query(sql, params = []) {
+    return pool.query(sql, params);
   }
-} catch (e) { console.warn('Employee migration skipped:', e.message); }
+};
 
-/* -- Migration: add project_details table -- */
-try {
-  db.exec(`
+// ─── Schema ───────────────────────────────────────────────────────────────────
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      email       TEXT UNIQUE NOT NULL,
+      password    TEXT NOT NULL,
+      role        TEXT NOT NULL DEFAULT 'employee',
+      created_at  TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS projects (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      description TEXT,
+      created_by  TEXT,
+      created_at  TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+    );
     CREATE TABLE IF NOT EXISTS project_details (
-      id               TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-      project_name     TEXT UNIQUE NOT NULL,
+      id               TEXT PRIMARY KEY,
+      project_name     TEXT UNIQUE,
       client_name      TEXT,
       mobile           TEXT,
       email            TEXT,
       address          TEXT,
-      fund_allocated   REAL DEFAULT 0,
-      fund_releases    TEXT DEFAULT '[]',
+      fund_allocated   NUMERIC DEFAULT 0,
+      fund_releases    JSONB DEFAULT '[]',
       drive_folder_url TEXT,
-      created_at       TEXT DEFAULT (datetime('now')),
-      updated_at       TEXT DEFAULT (datetime('now'))
-    )
+      created_at       TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at       TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS employees (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      email       TEXT UNIQUE NOT NULL,
+      phone       TEXT,
+      department  TEXT,
+      user_id     TEXT,
+      created_at  TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS expenses (
+      id                TEXT PRIMARY KEY,
+      vendor            TEXT NOT NULL,
+      invoice_no        TEXT,
+      amount            NUMERIC NOT NULL DEFAULT 0,
+      gst               NUMERIC DEFAULT 0,
+      total             NUMERIC NOT NULL DEFAULT 0,
+      description       TEXT,
+      date              TEXT NOT NULL,
+      category          TEXT NOT NULL,
+      project_id        TEXT,
+      project_name      TEXT,
+      is_reimbursement  INTEGER DEFAULT 0,
+      reimburse_to_id   TEXT,
+      reimburse_to_name TEXT,
+      status            TEXT DEFAULT 'pending',
+      uploaded_by_id    TEXT,
+      uploaded_by_name  TEXT,
+      file_path         TEXT,
+      drive_url         TEXT,
+      drive_file_id     TEXT,
+      created_at        TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
+      advance_paid      NUMERIC DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS bank_statement_entries (
+      id              SERIAL PRIMARY KEY,
+      date            TEXT,
+      vendor          TEXT,
+      amount          NUMERIC,
+      type            TEXT DEFAULT '',
+      invoice_no      TEXT DEFAULT '',
+      utr_number      TEXT DEFAULT '',
+      remark          TEXT DEFAULT '',
+      reference_files JSONB DEFAULT '[]',
+      statement_name  TEXT,
+      created_at      TEXT DEFAULT to_char(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+    );
   `);
-} catch (e) { console.warn('project_details table:', e.message); }
-
-/* -- Migration: add advance_paid column to expenses -- */
-try {
-  db.exec(`ALTER TABLE expenses ADD COLUMN advance_paid REAL DEFAULT 0`);
-} catch (e) { console.warn('advance_paid migration:', e.message); }
-
-/* -- Bank Statement Entries table -- */
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bank_statement_entries (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    date             TEXT,
-    vendor           TEXT,
-    amount           REAL DEFAULT 0,
-    type             TEXT DEFAULT '',
-    invoice_no       TEXT DEFAULT '',
-    utr_number       TEXT DEFAULT '',
-    remark           TEXT DEFAULT '',
-    reference_files  TEXT DEFAULT '[]',
-    statement_name   TEXT DEFAULT '',
-    created_at       TEXT DEFAULT (datetime('now'))
-  )
-`);
-
-/* ââ Seed admin account âââââââââââââââââââââââââââââââââââââââââââ */
-const adminExists = db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();
-if (!adminExists) {
-  const pw = process.env.ADMIN_PASSWORD || 'Admin@123';
-  db.prepare("INSERT INTO users (id,name,email,password,role) VALUES (?,?,?,?,'admin')")
-    .run(uuidv4(), 'Admin', process.env.ADMIN_EMAIL || 'admin@company.com', bcrypt.hashSync(pw, 10));
-  console.log('â Admin created:', process.env.ADMIN_EMAIL || 'admin@company.com');
+  console.log('✅ PostgreSQL schema ready');
 }
 
-/* ââ Seed demo projects only on a truly empty DB (no expenses yet) â */
-const projCount = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
-const expCount  = db.prepare('SELECT COUNT(*) as c FROM expenses').get().c;
-if (projCount === 0 && expCount === 0) {
-  const ins = db.prepare('INSERT OR IGNORE INTO projects (id,name) VALUES (?,?)');
-  ['Office Renovation','Client Project Alpha','Marketing Campaign Q1'].forEach(n => ins.run(uuidv4(), n));
-  console.log('â Demo projects seeded');
+async function seedAdmin() {
+  const adminExists = await db.get("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
+  if (!adminExists) {
+    const hashed = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'Admin@123', 10);
+    await db.run('INSERT INTO users (id, name, email, password, role) VALUES (?, ?, ?, ?, ?)',
+      [uuidv4(), 'Admin', process.env.ADMIN_EMAIL || 'admin@company.com', hashed, 'admin']);
+    console.log('✅ Admin seeded:', process.env.ADMIN_EMAIL || 'admin@company.com');
+  }
 }
 
+async function init() {
+  try {
+    await initSchema();
+    await seedAdmin();
+  } catch (err) {
+    console.error('❌ DB init error:', err.message);
+    throw err;
+  }
+}
+
+init().catch(console.error);
 module.exports = db;
