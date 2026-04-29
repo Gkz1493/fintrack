@@ -6,8 +6,8 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
-// ── Startup: confirm whether Anthropic key is available ───────────────────────
-console.log('[OCR] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'SET ✓' : 'NOT SET — will use Tesseract/regex fallback');
+// ── Startup: confirm whether Gemini key is available ───────────────────────
+console.log('[OCR] GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? 'SET ✓' : 'NOT SET — will use Tesseract/regex fallback');
 
 // ── multer — accept images AND pdf ───────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -47,13 +47,13 @@ Fields:
 
 Use null for any field you cannot find. Return ONLY the JSON.`;
 
-// ── Resize image with sharp (keeps Claude under its size limit) ───────────────
-async function prepareImageForClaude(imagePath) {
+// ── Resize image with sharp (keeps AI under its size limit) ───────────────
+async function prepareImageForAI(imagePath) {
   const rawBuffer = fs.readFileSync(imagePath);
   const fileSizeMB = rawBuffer.length / (1024 * 1024);
   console.log(`[OCR] Image file size: ${fileSizeMB.toFixed(2)} MB`);
 
-  // Always convert to JPEG + resize to max 1500px — ensures Claude accepts it
+  // Always convert to JPEG + resize to max 1500px — ensures AI accepts it
   try {
     const sharp = require('sharp');
     const resized = await sharp(rawBuffer)
@@ -68,7 +68,7 @@ async function prepareImageForClaude(imagePath) {
     console.warn('[OCR] sharp not available, sending raw:', sharpErr.message);
     // Fallback: send raw but only if under 4MB base64 (~3MB file)
     if (rawBuffer.length > 3 * 1024 * 1024) {
-      console.error('[OCR] Image too large for Claude without sharp resize — skipping Claude');
+      console.error('[OCR] Image too large for AI without sharp resize — skipping AI');
       return null;
     }
     const ext = path.extname(imagePath).toLowerCase();
@@ -77,54 +77,58 @@ async function prepareImageForClaude(imagePath) {
   }
 }
 
-// ── Claude Vision (for images) ────────────────────────────────────────────────
-async function extractImageWithClaude(imagePath) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+// ── Gemini Vision (for images) ────────────────────────────────────────────────
+async function extractImageWithGemini(imagePath) {
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   try {
-    const prepared = await prepareImageForClaude(imagePath);
+    const prepared = await prepareImageForAI(imagePath);
     if (!prepared) return null;
 
     const { buffer, mediaType } = prepared;
     const base64Image = buffer.toString('base64');
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-3-5-haiku-20241022',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Image } },
-          { type: 'text', text: EXTRACT_PROMPT },
-        ]}],
+        contents: [{
+          parts: [
+            { text: EXTRACT_PROMPT },
+            { inlineData: { mimeType: mediaType, data: base64Image } }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
       }),
     });
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => '(no body)');
-      console.error(`Claude Vision error: ${response.status} — ${errBody}`);
+      console.error(`Gemini Vision error: ${response.status} — ${errBody}`);
       return null;
     }
 
     const data = await response.json();
-    if (!data.content?.[0]?.text) {
-      console.error('Claude Vision: empty content in response', JSON.stringify(data));
+    const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!responseText) {
+      console.error('Gemini Vision: empty content in response', JSON.stringify(data));
       return null;
     }
-    return parseClaudeResponse(data.content[0].text, 'claude-vision');
+    return parseAIResponse(responseText, 'gemini-vision');
   } catch (err) {
-    console.error('Claude Vision error:', err.message);
+    console.error('Gemini Vision error:', err.message);
     return null;
   }
 }
 
-// ── Claude PDF extraction — 3-tier strategy ───────────────────────────────────
-// Tier 1 (text-based PDF):  pdf-parse → extract text → Claude text API
-// Tier 2 (scanned PDF):     Claude native PDF beta  → direct PDF reading
+// ── Gemini PDF extraction — 3-tier strategy ───────────────────────────────────
+// Tier 1 (text-based PDF):  pdf-parse → extract text → Gemini text API
+// Tier 2 (scanned PDF):     Gemini native PDF  → direct PDF reading
 // Tier 3 (no API key):      pdf-parse text → regex parser
-async function extractPdfWithClaude(pdfPath) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+async function extractPdfWithGemini(pdfPath) {
+  const apiKey = process.env.GEMINI_API_KEY;
   const pdfBuffer = fs.readFileSync(pdfPath);
   const fileSizeMB = pdfBuffer.length / (1024 * 1024);
   console.log(`[OCR] PDF size: ${fileSizeMB.toFixed(2)} MB`);
@@ -147,75 +151,74 @@ async function extractPdfWithClaude(pdfPath) {
     return null;
   }
 
-  // ── Tier 1: Good text extracted → send as text to Claude ───────────────────
+  // ── Tier 1: Good text extracted → send as text to Gemini ───────────────────
   if (rawText.length >= 50) {
-    console.log('[OCR] PDF has text content — sending to Claude as text');
+    console.log('[OCR] PDF has text content — sending to Gemini as text');
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
-        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-3-5-haiku-20241022',
-          max_tokens: 1024,
-          messages: [{ role: 'user', content:
-            EXTRACT_PROMPT + '\n\nHere is the raw text extracted from the PDF invoice:\n\n' + rawText.slice(0, 8000),
+          contents: [{
+            parts: [{ text: EXTRACT_PROMPT + '\n\nHere is the raw text extracted from the PDF invoice:\n\n' + rawText.slice(0, 8000) }]
           }],
+          generationConfig: { responseMimeType: "application/json" }
         }),
       });
       if (response.ok) {
         const data = await response.json();
-        if (data.content?.[0]?.text) {
-          console.log('[OCR] Claude PDF text extraction succeeded');
-          return parseClaudeResponse(data.content[0].text, 'claude-pdf-text');
+        const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (responseText) {
+          console.log('[OCR] Gemini PDF text extraction succeeded');
+          return parseAIResponse(responseText, 'gemini-pdf-text');
         }
       } else {
         const errBody = await response.text().catch(() => '');
-        console.warn(`[OCR] Claude PDF text API: ${response.status} — ${errBody}`);
+        console.warn(`[OCR] Gemini PDF text API: ${response.status} — ${errBody}`);
       }
     } catch (e) {
-      console.warn('[OCR] Claude PDF text call failed:', e.message);
+      console.warn('[OCR] Gemini PDF text call failed:', e.message);
     }
-    // Claude text failed but we have text — fall back to regex
+    // Gemini text failed but we have text — fall back to regex
     return parsePlainText(rawText, 'regex');
   }
 
-  // ── Tier 2: Scanned PDF (little/no text) → Claude native PDF beta ──────────
-  console.log('[OCR] PDF appears scanned (little text) — trying Claude native PDF reader');
-  if (fileSizeMB > 20) {
-    console.error('[OCR] PDF too large for Claude native read (>20MB) — aborting');
+  // ── Tier 2: Scanned PDF (little/no text) → Gemini native PDF reader ──────────
+  console.log('[OCR] PDF appears scanned (little text) — trying Gemini native PDF reader');
+  if (fileSizeMB > 19) {
+    console.error('[OCR] PDF too large for Gemini native inline read (>19MB) — aborting');
     return null;
   }
   try {
     const base64Pdf = pdfBuffer.toString('base64');
-    const response  = await fetch('https://api.anthropic.com/v1/messages', {
+    const response  = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'pdfs-2024-09-25',   // enable native PDF support
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-3-5-haiku-20241022',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Pdf } },
-          { type: 'text', text: EXTRACT_PROMPT },
-        ]}],
+        contents: [{
+          parts: [
+            { text: EXTRACT_PROMPT },
+            { inlineData: { mimeType: 'application/pdf', data: base64Pdf } }
+          ]
+        }],
+        generationConfig: { responseMimeType: "application/json" }
       }),
     });
     if (response.ok) {
       const data = await response.json();
-      if (data.content?.[0]?.text) {
-        console.log('[OCR] Claude native PDF read succeeded');
-        return parseClaudeResponse(data.content[0].text, 'claude-pdf-native');
+      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (responseText) {
+        console.log('[OCR] Gemini native PDF read succeeded');
+        return parseAIResponse(responseText, 'gemini-pdf-native');
       }
     } else {
       const errBody = await response.text().catch(() => '');
-      console.error(`[OCR] Claude native PDF error: ${response.status} — ${errBody}`);
+      console.error(`[OCR] Gemini native PDF error: ${response.status} — ${errBody}`);
     }
   } catch (e) {
-    console.error('[OCR] Claude native PDF call failed:', e.message);
+    console.error('[OCR] Gemini native PDF call failed:', e.message);
   }
 
   // ── Tier 3: Everything failed — best-effort regex on whatever text we have ──
@@ -223,8 +226,8 @@ async function extractPdfWithClaude(pdfPath) {
   return null;
 }
 
-// ── Parse Claude JSON response ────────────────────────────────────────────────
-function parseClaudeResponse(text, source) {
+// ── Parse AI JSON response ────────────────────────────────────────────────
+function parseAIResponse(text, source) {
   try {
     // Strip all markdown code fences (opening and closing, with or without language tag)
     const cleaned = text
@@ -232,7 +235,7 @@ function parseClaudeResponse(text, source) {
       .replace(/```/g, '')
       .trim();
     const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) { console.error('No JSON in Claude response; raw text:', text.slice(0, 200)); return null; }
+    if (!match) { console.error('No JSON in AI response; raw text:', text.slice(0, 200)); return null; }
     const parsed = JSON.parse(match[0]);
     const validCats = ['consumables','travel','advance','overhead','other'];
     if (!validCats.includes(parsed.suggestedCategory)) parsed.suggestedCategory = 'other';
@@ -328,12 +331,12 @@ router.post('/', authenticate, upload.single('file'), async (req, res) => {
     if (isPdf) {
       // ── PDF path ──────────────────────────────────────────────────────────
       console.log('OCR: PDF detected, extracting text');
-      result = await extractPdfWithClaude(filePath);
+      result = await extractPdfWithGemini(filePath);
     } else {
       // ── Image path ────────────────────────────────────────────────────────
-      result = await extractImageWithClaude(filePath);
+      result = await extractImageWithGemini(filePath);
       if (!result) {
-        console.log('OCR: Claude Vision failed or key not set, falling back to Tesseract');
+        console.log('OCR: Gemini Vision failed or key not set, falling back to Tesseract');
         const text = await runTesseract(filePath);
         // Always produce a result — parsePlainText with empty string returns all-null fields
         result = parsePlainText(text || '', 'tesseract');
