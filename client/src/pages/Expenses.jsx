@@ -50,8 +50,8 @@ export default function Expenses() {
     setExp(prev => prev.filter(e => e.id !== id));
   };
 
-  const total     = expenses.reduce((s,e) => s + e.total, 0);
-  const pendReimb = expenses.filter(e => e.is_reimbursement && e.status==='pending').reduce((s,e)=>s+e.total,0);
+  const total     = expenses.reduce((s,e) => s + parseFloat(e.total||0), 0);
+  const pendReimb = expenses.filter(e => e.is_reimbursement && e.status==='pending').reduce((s,e)=>s+parseFloat(e.total||0),0);
 
   return (
     <div className="p-4 md:p-6 page-enter max-w-7xl mx-auto space-y-4">
