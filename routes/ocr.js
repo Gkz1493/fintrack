@@ -119,46 +119,108 @@ async function extractImageWithClaude(imagePath) {
   }
 }
 
-// ── Claude Text (for PDFs — text extracted first, then sent as text) ──────────
+// ── Claude PDF extraction — 3-tier strategy ───────────────────────────────────
+// Tier 1 (text-based PDF):  pdf-parse → extract text → Claude text API
+// Tier 2 (scanned PDF):     Claude native PDF beta  → direct PDF reading
+// Tier 3 (no API key):      pdf-parse text → regex parser
 async function extractPdfWithClaude(pdfPath) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
+  const pdfBuffer = fs.readFileSync(pdfPath);
+  const fileSizeMB = pdfBuffer.length / (1024 * 1024);
+  console.log(`[OCR] PDF size: ${fileSizeMB.toFixed(2)} MB`);
+
+  // ── Step 1: Try extracting text with pdf-parse ──────────────────────────────
+  let rawText = '';
   try {
-    // 1. Extract raw text from the PDF
     const pdfParse = require('pdf-parse');
-    const buffer = fs.readFileSync(pdfPath);
-    const pdfData = await pdfParse(buffer);
-    const rawText = pdfData.text.trim();
+    const pdfData  = await pdfParse(pdfBuffer);
+    rawText = (pdfData.text || '').trim();
+    console.log(`[OCR] PDF text chars extracted: ${rawText.length}`);
+  } catch (e) {
+    console.warn('[OCR] pdf-parse failed:', e.message);
+  }
 
-    if (!rawText || rawText.length < 20) {
-      console.log('PDF text too short, cannot extract');
-      return null;
+  // ── No API key → regex on whatever text we have ─────────────────────────────
+  if (!apiKey) {
+    if (rawText.length >= 20) return parsePlainText(rawText, 'regex');
+    console.log('[OCR] No API key and no extractable text — cannot process this PDF');
+    return null;
+  }
+
+  // ── Tier 1: Good text extracted → send as text to Claude ───────────────────
+  if (rawText.length >= 50) {
+    console.log('[OCR] PDF has text content — sending to Claude as text');
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-3-5-haiku-20241022',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content:
+            EXTRACT_PROMPT + '\n\nHere is the raw text extracted from the PDF invoice:\n\n' + rawText.slice(0, 8000),
+          }],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.content?.[0]?.text) {
+          console.log('[OCR] Claude PDF text extraction succeeded');
+          return parseClaudeResponse(data.content[0].text, 'claude-pdf-text');
+        }
+      } else {
+        const errBody = await response.text().catch(() => '');
+        console.warn(`[OCR] Claude PDF text API: ${response.status} — ${errBody}`);
+      }
+    } catch (e) {
+      console.warn('[OCR] Claude PDF text call failed:', e.message);
     }
-    console.log('PDF text extracted, length:', rawText.length);
+    // Claude text failed but we have text — fall back to regex
+    return parsePlainText(rawText, 'regex');
+  }
 
-    // 2. Send as plain text to Claude Haiku
-    if (!apiKey) {
-      // No API key — fall back to regex parsing of extracted text
-      return parsePlainText(rawText, 'regex');
-    }
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+  // ── Tier 2: Scanned PDF (little/no text) → Claude native PDF beta ──────────
+  console.log('[OCR] PDF appears scanned (little text) — trying Claude native PDF reader');
+  if (fileSizeMB > 20) {
+    console.error('[OCR] PDF too large for Claude native read (>20MB) — aborting');
+    return null;
+  }
+  try {
+    const base64Pdf = pdfBuffer.toString('base64');
+    const response  = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'pdfs-2024-09-25',   // enable native PDF support
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         model: 'claude-3-5-haiku-20241022',
         max_tokens: 1024,
-        messages: [{ role: 'user', content:
-          EXTRACT_PROMPT + '\n\nHere is the raw text extracted from the PDF invoice:\n\n' + rawText,
-        }],
+        messages: [{ role: 'user', content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Pdf } },
+          { type: 'text', text: EXTRACT_PROMPT },
+        ]}],
       }),
     });
-    if (!response.ok) { console.error('Claude PDF text error:', response.status, await response.text().catch(()=>'')); return parsePlainText(rawText, 'regex'); }
-    const data = await response.json();
-    return parseClaudeResponse(data.content[0].text, 'claude-pdf');
-  } catch (err) {
-    console.error('PDF extraction error:', err.message);
-    return null;
+    if (response.ok) {
+      const data = await response.json();
+      if (data.content?.[0]?.text) {
+        console.log('[OCR] Claude native PDF read succeeded');
+        return parseClaudeResponse(data.content[0].text, 'claude-pdf-native');
+      }
+    } else {
+      const errBody = await response.text().catch(() => '');
+      console.error(`[OCR] Claude native PDF error: ${response.status} — ${errBody}`);
+    }
+  } catch (e) {
+    console.error('[OCR] Claude native PDF call failed:', e.message);
   }
+
+  // ── Tier 3: Everything failed — best-effort regex on whatever text we have ──
+  if (rawText.length > 0) return parsePlainText(rawText, 'regex');
+  return null;
 }
 
 // ── Parse Claude JSON response ────────────────────────────────────────────────
