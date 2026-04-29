@@ -236,7 +236,7 @@ router.get('/export/pdf', authenticate, async (req, res) => {
 });
 
 // âââ POST /api/expenses âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-router.post('/', authenticate, upload.single('file'), async (req, res) => {
+router.get('/reimburse-names', authenticate, async (req, res) => {  try {    const rows = await db.all('SELECT name FROM employees ORDER BY name');    res.json(rows.map(r => r.name));  } catch (err) { res.status(500).json({ error: err.message }); }});router.post('/', authenticate, upload.single('file'), async (req, res) => {
   try {
     const {
       vendor, invoice_no, amount, gst, total, description,
