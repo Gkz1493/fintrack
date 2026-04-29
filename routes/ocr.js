@@ -91,8 +91,8 @@ async function extractImageWithGemini(imagePath) {
     const payload = JSON.stringify({
       contents: [{
         parts: [
-          { text: EXTRACT_PROMPT },
-          { inlineData: { mimeType: mediaType, data: base64Image } }
+          { inlineData: { mimeType: mediaType, data: base64Image } },
+          { text: EXTRACT_PROMPT }
         ]
       }],
       generationConfig: {
@@ -107,9 +107,9 @@ async function extractImageWithGemini(imagePath) {
     });
 
     if (response.status === 503 || response.status === 429) {
-      console.log(`[OCR] Gemini 2.5 Flash busy (${response.status}) — retrying with 2.0 Flash in 2s...`);
-      await new Promise(r => setTimeout(r, 2000));
-      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+      console.log(`[OCR] Gemini 2.5 Flash busy (${response.status}) — retrying in 3s...`);
+      await new Promise(r => setTimeout(r, 3000));
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: payload,
@@ -206,8 +206,8 @@ async function extractPdfWithGemini(pdfPath) {
     const payload = JSON.stringify({
       contents: [{
         parts: [
-          { text: EXTRACT_PROMPT },
-          { inlineData: { mimeType: 'application/pdf', data: base64Pdf } }
+          { inlineData: { mimeType: 'application/pdf', data: base64Pdf } },
+          { text: EXTRACT_PROMPT }
         ]
       }],
       generationConfig: { responseMimeType: "application/json" }
@@ -219,11 +219,11 @@ async function extractPdfWithGemini(pdfPath) {
       body: payload,
     });
 
-    // Handle 503 (High Demand) or 429 (Rate Limit) by retrying with a different model after a delay
+    // Handle 503 (High Demand) or 429 (Rate Limit) by retrying after a 3s delay
     if (response.status === 503 || response.status === 429) {
-      console.log(`[OCR] Gemini 2.5 Flash busy (${response.status}) — retrying with 2.0 Flash in 2s...`);
-      await new Promise(r => setTimeout(r, 2000));
-      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+      console.log(`[OCR] Gemini 2.5 Flash busy (${response.status}) — retrying in 3s...`);
+      await new Promise(r => setTimeout(r, 3000));
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: payload,
