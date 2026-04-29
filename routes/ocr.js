@@ -6,6 +6,9 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
+// ── Startup: confirm whether Anthropic key is available ───────────────────────
+console.log('[OCR] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'SET ✓' : 'NOT SET — will use Tesseract/regex fallback');
+
 // ── multer — accept images AND pdf ───────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -94,7 +97,7 @@ async function extractPdfWithClaude(pdfPath) {
     // 2. Send as plain text to Claude Haiku
     if (!apiKey) {
       // No API key — fall back to regex parsing of extracted text
-      return parsePlainText(rawText, 'tesseract');
+      return parsePlainText(rawText, 'regex');
     }
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -108,7 +111,7 @@ async function extractPdfWithClaude(pdfPath) {
         }],
       }),
     });
-    if (!response.ok) { console.error('Claude PDF text error:', response.status); return parsePlainText(rawText, 'tesseract'); }
+    if (!response.ok) { console.error('Claude PDF text error:', response.status, await response.text().catch(()=>'')); return parsePlainText(rawText, 'regex'); }
     const data = await response.json();
     return parseClaudeResponse(data.content[0].text, 'claude-pdf');
   } catch (err) {
@@ -120,15 +123,23 @@ async function extractPdfWithClaude(pdfPath) {
 // ── Parse Claude JSON response ────────────────────────────────────────────────
 function parseClaudeResponse(text, source) {
   try {
-    const cleaned = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/,'').trim();
+    // Strip all markdown code fences (opening and closing, with or without language tag)
+    const cleaned = text
+      .replace(/```(?:json)?\s*/gi, '')
+      .replace(/```/g, '')
+      .trim();
     const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) { console.error('No JSON in Claude response'); return null; }
+    if (!match) { console.error('No JSON in Claude response; raw text:', text.slice(0, 200)); return null; }
     const parsed = JSON.parse(match[0]);
     const validCats = ['consumables','travel','advance','overhead','other'];
     if (!validCats.includes(parsed.suggestedCategory)) parsed.suggestedCategory = 'other';
+    // Coerce numeric fields that Claude might return as strings
+    if (parsed.amount  != null) parsed.amount  = parseFloat(parsed.amount)  || null;
+    if (parsed.gst     != null) parsed.gst     = parseFloat(parsed.gst)     || 0;
+    if (parsed.total   != null) parsed.total   = parseFloat(parsed.total)   || null;
     return { ...parsed, source };
   } catch (err) {
-    console.error('JSON parse error:', err.message);
+    console.error('JSON parse error:', err.message, '| raw:', text ? text.slice(0, 200) : '(empty)');
     return null;
   }
 }
@@ -211,9 +222,10 @@ router.post('/', authenticate, upload.single('file'), async (req, res) => {
       // ── Image path ────────────────────────────────────────────────────────
       result = await extractImageWithClaude(filePath);
       if (!result) {
-        console.log('OCR: Claude Vision failed, falling back to Tesseract');
+        console.log('OCR: Claude Vision failed or key not set, falling back to Tesseract');
         const text = await runTesseract(filePath);
-        if (text) result = parsePlainText(text, 'tesseract');
+        // Always produce a result — parsePlainText with empty string returns all-null fields
+        result = parsePlainText(text || '', 'tesseract');
       }
     }
 
