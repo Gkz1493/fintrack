@@ -47,15 +47,46 @@ Fields:
 
 Use null for any field you cannot find. Return ONLY the JSON.`;
 
+// ── Resize image with sharp (keeps Claude under its size limit) ───────────────
+async function prepareImageForClaude(imagePath) {
+  const rawBuffer = fs.readFileSync(imagePath);
+  const fileSizeMB = rawBuffer.length / (1024 * 1024);
+  console.log(`[OCR] Image file size: ${fileSizeMB.toFixed(2)} MB`);
+
+  // Always convert to JPEG + resize to max 1500px — ensures Claude accepts it
+  try {
+    const sharp = require('sharp');
+    const resized = await sharp(rawBuffer)
+      .rotate()                          // auto-rotate from EXIF (fixes sideways photos)
+      .resize({ width: 1500, height: 1500, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const sizeMB = resized.length / (1024 * 1024);
+    console.log(`[OCR] Resized to: ${sizeMB.toFixed(2)} MB (JPEG)`);
+    return { buffer: resized, mediaType: 'image/jpeg' };
+  } catch (sharpErr) {
+    console.warn('[OCR] sharp not available, sending raw:', sharpErr.message);
+    // Fallback: send raw but only if under 4MB base64 (~3MB file)
+    if (rawBuffer.length > 3 * 1024 * 1024) {
+      console.error('[OCR] Image too large for Claude without sharp resize — skipping Claude');
+      return null;
+    }
+    const ext = path.extname(imagePath).toLowerCase();
+    const mediaTypeMap = { '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.gif':'image/gif','.webp':'image/webp' };
+    return { buffer: rawBuffer, mediaType: mediaTypeMap[ext] || 'image/jpeg' };
+  }
+}
+
 // ── Claude Vision (for images) ────────────────────────────────────────────────
 async function extractImageWithClaude(imagePath) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   try {
-    const base64Image = fs.readFileSync(imagePath).toString('base64');
-    const ext = path.extname(imagePath).toLowerCase();
-    const mediaTypeMap = { '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.gif':'image/gif','.webp':'image/webp' };
-    const mediaType = mediaTypeMap[ext] || 'image/jpeg';
+    const prepared = await prepareImageForClaude(imagePath);
+    if (!prepared) return null;
+
+    const { buffer, mediaType } = prepared;
+    const base64Image = buffer.toString('base64');
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -69,8 +100,18 @@ async function extractImageWithClaude(imagePath) {
         ]}],
       }),
     });
-    if (!response.ok) { console.error('Claude Vision error:', response.status); return null; }
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '(no body)');
+      console.error(`Claude Vision error: ${response.status} — ${errBody}`);
+      return null;
+    }
+
     const data = await response.json();
+    if (!data.content?.[0]?.text) {
+      console.error('Claude Vision: empty content in response', JSON.stringify(data));
+      return null;
+    }
     return parseClaudeResponse(data.content[0].text, 'claude-vision');
   } catch (err) {
     console.error('Claude Vision error:', err.message);
