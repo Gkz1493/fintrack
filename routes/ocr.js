@@ -88,7 +88,7 @@ async function extractImageWithGemini(imagePath) {
     const { buffer, mediaType } = prepared;
     const base64Image = buffer.toString('base64');
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -155,7 +155,7 @@ async function extractPdfWithGemini(pdfPath) {
   if (rawText.length >= 50) {
     console.log('[OCR] PDF has text content — sending to Gemini as text');
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -191,7 +191,7 @@ async function extractPdfWithGemini(pdfPath) {
   }
   try {
     const base64Pdf = pdfBuffer.toString('base64');
-    const response  = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+    const response  = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
